@@ -19,6 +19,19 @@ hooks:
   calickronpcbridge:
     enabled: true
 
+
+site-planner:
+  search-min-distance: 10
+  search-max-distance: 28
+  lateral-step: 2
+  max-side-offset: 16
+  preserve-world-spawn-radius: 8
+  avoid-ground-materials:
+    - DIRT_PATH
+    - GRASS_PATH
+    - OAK_SLAB
+    - SPRUCE_SLAB
+
 build:
   blocks-per-tick: 25
   blocks-per-step: 1

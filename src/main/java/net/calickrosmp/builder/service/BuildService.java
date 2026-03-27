@@ -2,6 +2,7 @@ package net.calickrosmp.builder.service;
 
 import net.calickrosmp.builder.CalickroBuilderPlugin;
 import net.calickrosmp.builder.build.BuildExecutor;
+import net.calickrosmp.builder.build.BuildSitePlanner;
 import net.calickrosmp.builder.hook.CalickroNpcBridgeHook;
 import net.calickrosmp.builder.job.BuildJob;
 import net.calickrosmp.builder.job.BuildJobManager;
@@ -37,6 +38,7 @@ public final class BuildService {
     private final BuildValidator buildValidator;
     private final CalickroNpcBridgeHook bridgeHook;
     private final BuildExecutor buildExecutor;
+    private final BuildSitePlanner buildSitePlanner;
 
     public BuildService(
             CalickroBuilderPlugin plugin,
@@ -53,6 +55,7 @@ public final class BuildService {
         this.buildValidator = buildValidator;
         this.bridgeHook = bridgeHook;
         this.buildExecutor = new BuildExecutor(plugin, buildJobManager, bridgeHook);
+        this.buildSitePlanner = new BuildSitePlanner(plugin);
     }
 
     public void bindSelectedNpc(Player player) {
@@ -110,7 +113,12 @@ public final class BuildService {
 
         Orientation orientation = orientationFacingPlayer(builderNpc.getStoredLocation(), player.getLocation());
         HouseSpec houseSpec = HouseSpec.starter(orientation);
-        Location anchor = starterHouseAnchor(builderNpc.getStoredLocation(), orientation, houseSpec);
+        BuildSitePlanner.SiteSelection selection = buildSitePlanner.selectStarterHouseAnchor(player, builderNpc.getStoredLocation(), orientation, houseSpec);
+        if (!selection.found()) {
+            Text.send(player, plugin.settings().messagePrefix(), "&c" + selection.message());
+            return;
+        }
+        Location anchor = selection.anchor();
         BuildPlan plan = new BuildPlan(
                 StructureType.HOUSE,
                 "Starter 1-floor house facing the player",
@@ -179,16 +187,6 @@ public final class BuildService {
         return CitizensAPI.getNPCRegistry().getById(npcId);
     }
 
-    private Location starterHouseAnchor(Location npcLocation, Orientation orientation, HouseSpec spec) {
-        Location base = npcLocation.clone();
-        int offset = 3;
-        return switch (orientation) {
-            case SOUTH -> base.add(-(spec.width() / 2.0), 0, offset);
-            case NORTH -> base.add(spec.width() / 2.0, 0, -offset);
-            case EAST -> base.add(offset, 0, spec.width() / 2.0);
-            case WEST -> base.add(-offset, 0, -(spec.width() / 2.0));
-        };
-    }
 
     public Orientation orientationFor(Location location) {
         float yaw = location.getYaw();

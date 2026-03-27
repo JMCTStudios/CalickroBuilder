@@ -4,6 +4,7 @@ public enum BuilderState {
     IDLE,
     PREVIEWING,
     VALIDATING,
+    MOVING,
     BUILDING,
     PATROLLING,
     REPAIRING,

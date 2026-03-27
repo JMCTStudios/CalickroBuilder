@@ -56,38 +56,79 @@ public final class BuildExecutor {
         List<RelocatedNpc> movedNpcs = relocateAffectedNpcs(builderNpc, bounds, relocationSpot);
         Location workSpot = workSpot(plan);
 
-        profile.setState(BuilderState.BUILDING);
-        bridgeHook.pushState(profile.identity(), BuilderState.BUILDING, plan.summary());
+        profile.setState(BuilderState.MOVING);
+        bridgeHook.pushState(profile.identity(), BuilderState.MOVING, "Walking to build site");
         buildJobManager.startCurrent(profile.identity().npcId());
 
-        navigateBuilderToSite(builderNpc, workSpot, () -> beginPlacement(requester, profile, builderNpc, movedNpcs, tasks, plan, bounds, job));
+        navigateBuilderToSite(
+                builderNpc,
+                workSpot,
+                () -> {
+                    profile.setState(BuilderState.BUILDING);
+                    bridgeHook.pushState(profile.identity(), BuilderState.BUILDING, plan.summary());
+                    beginPlacement(requester, profile, builderNpc, movedNpcs, tasks, plan, bounds, job);
+                },
+                () -> {
+                    restoreNpcs(movedNpcs);
+                    buildJobManager.failCurrent(profile.identity().npcId());
+                    profile.setState(BuilderState.ERROR);
+                    bridgeHook.pushState(profile.identity(), BuilderState.ERROR, "Could not reach build site");
+                    requester.sendMessage("§c" + profile.identity().displayName() + " could not walk to the build site.");
+                }
+        );
     }
 
-    private void navigateBuilderToSite(NPC builderNpc, Location workSpot, Runnable onArrive) {
-        builderNpc.getNavigator().setTarget(workSpot);
+    private void navigateBuilderToSite(NPC builderNpc, Location workSpot, Runnable onArrive, Runnable onFail) {
+        Entity entity = builderNpc.getEntity();
+        if (entity == null) {
+            onFail.run();
+            return;
+        }
+
+        Location centeredTarget = workSpot.clone().add(0.0, 0.0, 0.0);
+        Location start = entity.getLocation().clone();
+        double startDistanceSquared = start.distanceSquared(centeredTarget);
+
+        builderNpc.faceLocation(centeredTarget);
+        builderNpc.getNavigator().setTarget(centeredTarget);
 
         new BukkitRunnable() {
             int checks;
+            boolean moved;
 
             @Override
             public void run() {
                 checks++;
-                Entity entity = builderNpc.getEntity();
-                if (entity == null) {
-                    if (checks > 80) {
+                Entity currentEntity = builderNpc.getEntity();
+                if (currentEntity == null) {
+                    if (checks > 40) {
                         cancel();
-                        onArrive.run();
+                        onFail.run();
                     }
                     return;
                 }
 
-                if (entity.getLocation().distanceSquared(workSpot) <= 2.25 || checks > 120) {
+                Location current = currentEntity.getLocation();
+                double currentDistanceSquared = current.distanceSquared(centeredTarget);
+                if (current.distanceSquared(start) >= 1.0) {
+                    moved = true;
+                }
+
+                if (currentDistanceSquared <= 2.25) {
                     builderNpc.getNavigator().cancelNavigation();
-                    if (entity.getLocation().distanceSquared(workSpot) > 2.25) {
-                        builderNpc.teleport(workSpot, PlayerTeleportEvent.TeleportCause.PLUGIN);
-                    }
                     cancel();
                     onArrive.run();
+                    return;
+                }
+
+                if (checks >= 100) {
+                    builderNpc.getNavigator().cancelNavigation();
+                    cancel();
+                    if (startDistanceSquared <= 2.25 || moved) {
+                        onArrive.run();
+                    } else {
+                        onFail.run();
+                    }
                 }
             }
         }.runTaskTimer(plugin, 0L, 5L);

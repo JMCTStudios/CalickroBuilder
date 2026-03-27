@@ -23,3 +23,10 @@ permissions:
   calickrobuilder.use:
     description: Basic builder use permission
     default: true
+
+  calickrobuilder.bypass.preserve:
+    description: Lets the builder ignore preserved spawn-center checks
+    default: op
+  calickrobuilder.bypass.all:
+    description: Full builder bypass for future advanced checks
+    default: op

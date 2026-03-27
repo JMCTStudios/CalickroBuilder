@@ -4,6 +4,9 @@ import net.calickrosmp.builder.CalickroBuilderPlugin;
 import org.bukkit.Material;
 import org.bukkit.configuration.file.FileConfiguration;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public final class BuilderSettings {
     private final CalickroBuilderPlugin plugin;
     private boolean debug;
@@ -18,6 +21,12 @@ public final class BuilderSettings {
     private long buildIntervalTicks;
     private Material defaultPathMaterial;
     private String messagePrefix;
+    private int siteSearchMinDistance;
+    private int siteSearchMaxDistance;
+    private int siteLateralStep;
+    private int siteMaxSideOffset;
+    private int preserveWorldSpawnRadius;
+    private List<Material> siteAvoidGroundMaterials;
 
     public BuilderSettings(CalickroBuilderPlugin plugin) {
         this.plugin = plugin;
@@ -41,6 +50,21 @@ public final class BuilderSettings {
             this.defaultPathMaterial = Material.DIRT_PATH;
         }
         this.messagePrefix = config.getString("messages.prefix", "&6[CalickroBuilder]&r ");
+        this.siteSearchMinDistance = config.getInt("site-planner.search-min-distance", 10);
+        this.siteSearchMaxDistance = config.getInt("site-planner.search-max-distance", 28);
+        this.siteLateralStep = config.getInt("site-planner.lateral-step", 2);
+        this.siteMaxSideOffset = config.getInt("site-planner.max-side-offset", 16);
+        this.preserveWorldSpawnRadius = config.getInt("site-planner.preserve-world-spawn-radius", 8);
+        this.siteAvoidGroundMaterials = new ArrayList<>();
+        for (String name : config.getStringList("site-planner.avoid-ground-materials")) {
+            Material material = Material.matchMaterial(name);
+            if (material != null) {
+                this.siteAvoidGroundMaterials.add(material);
+            }
+        }
+        if (this.siteAvoidGroundMaterials.isEmpty()) {
+            this.siteAvoidGroundMaterials.add(Material.DIRT_PATH);
+        }
     }
 
     public boolean debug() { return debug; }
@@ -55,4 +79,10 @@ public final class BuilderSettings {
     public long buildIntervalTicks() { return buildIntervalTicks; }
     public Material defaultPathMaterial() { return defaultPathMaterial; }
     public String messagePrefix() { return messagePrefix; }
+    public int siteSearchMinDistance() { return siteSearchMinDistance; }
+    public int siteSearchMaxDistance() { return siteSearchMaxDistance; }
+    public int siteLateralStep() { return siteLateralStep; }
+    public int siteMaxSideOffset() { return siteMaxSideOffset; }
+    public int preserveWorldSpawnRadius() { return preserveWorldSpawnRadius; }
+    public List<Material> siteAvoidGroundMaterials() { return List.copyOf(siteAvoidGroundMaterials); }
 }
