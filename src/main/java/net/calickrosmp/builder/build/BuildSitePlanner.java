@@ -1,6 +1,7 @@
 package net.calickrosmp.builder.build;
 
 import net.calickrosmp.builder.CalickroBuilderPlugin;
+import net.calickrosmp.builder.hook.WorldGuardHook;
 import net.calickrosmp.builder.plan.HouseSpec;
 import net.calickrosmp.builder.plan.Orientation;
 import org.bukkit.Location;
@@ -15,27 +16,28 @@ import java.util.Set;
 
 public final class BuildSitePlanner {
     private final CalickroBuilderPlugin plugin;
+    private final WorldGuardHook worldGuardHook;
 
-    public BuildSitePlanner(CalickroBuilderPlugin plugin) {
+    public BuildSitePlanner(CalickroBuilderPlugin plugin, WorldGuardHook worldGuardHook) {
         this.plugin = plugin;
+        this.worldGuardHook = worldGuardHook;
     }
 
     public SiteSelection selectStarterHouseAnchor(Player requester, Location npcLocation, Orientation orientation, HouseSpec spec) {
-        World world = npcLocation.getWorld();
-        if (world == null) {
-            return SiteSelection.failure("The builder is not in a valid world.");
+        if (npcLocation == null || npcLocation.getWorld() == null) {
+            return SiteSelection.failure("I don't know where to start building from yet.");
         }
 
-        int width = Math.max(7, spec.width());
-        int depth = Math.max(9, spec.depth());
+        World world = npcLocation.getWorld();
+        int width = spec.width();
+        int depth = spec.depth();
         int doorX = width / 2;
-
         int minDistance = plugin.settings().siteSearchMinDistance();
         int maxDistance = plugin.settings().siteSearchMaxDistance();
         int lateralStep = Math.max(1, plugin.settings().siteLateralStep());
-        int maxSideOffset = plugin.settings().siteMaxSideOffset();
+        int maxSideOffset = Math.max(0, plugin.settings().siteMaxSideOffset());
 
-        for (int forward = minDistance; forward <= maxDistance; forward++) {
+        for (int forward = minDistance; forward <= maxDistance; forward += 2) {
             for (int side = 0; side <= maxSideOffset; side += lateralStep) {
                 int[] offsets = side == 0 ? new int[]{0} : new int[]{side, -side};
                 for (int sideOffset : offsets) {
@@ -68,6 +70,11 @@ public final class BuildSitePlanner {
         boolean bypassPreserve = requester.hasPermission("calickrobuilder.bypass.preserve") || requester.hasPermission("calickrobuilder.bypass.all");
 
         Location spawn = world.getSpawnLocation();
+
+        WorldGuardHook.ValidationScan wgScan = worldGuardHook.scanPlan(requester, anchor, orientation, width, depth, padding);
+        if (!wgScan.allowed()) {
+            return SiteCheckResult.blocked(wgScan.message());
+        }
 
         for (int localX = -padding; localX < width + padding; localX++) {
             for (int localZ = -padding; localZ < depth + padding; localZ++) {
@@ -106,7 +113,6 @@ public final class BuildSitePlanner {
             }
         }
 
-        // Make sure the front porch itself does not land on a road either.
         List<Location> porchChecks = switch (orientation) {
             case SOUTH -> List.of(anchor.clone().add(width / 2.0, 0, -1.0));
             case NORTH -> List.of(anchor.clone().add(-(width / 2.0), 0, 1.0));

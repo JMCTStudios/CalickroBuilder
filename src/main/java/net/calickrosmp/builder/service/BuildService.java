@@ -3,6 +3,7 @@ package net.calickrosmp.builder.service;
 import net.calickrosmp.builder.CalickroBuilderPlugin;
 import net.calickrosmp.builder.build.BuildExecutor;
 import net.calickrosmp.builder.build.BuildSitePlanner;
+import net.calickrosmp.builder.build.BuildSitePlanner.SiteSelection;
 import net.calickrosmp.builder.hook.CalickroNpcBridgeHook;
 import net.calickrosmp.builder.job.BuildJob;
 import net.calickrosmp.builder.job.BuildJobManager;
@@ -22,8 +23,6 @@ import net.calickrosmp.builder.text.Text;
 import net.calickrosmp.builder.validation.BuildValidator;
 import net.calickrosmp.builder.validation.ValidationIssue;
 import net.calickrosmp.builder.validation.ValidationResult;
-import net.citizensnpcs.api.CitizensAPI;
-import net.citizensnpcs.api.npc.NPC;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 
@@ -55,7 +54,7 @@ public final class BuildService {
         this.buildValidator = buildValidator;
         this.bridgeHook = bridgeHook;
         this.buildExecutor = new BuildExecutor(plugin, buildJobManager, bridgeHook);
-        this.buildSitePlanner = new BuildSitePlanner(plugin);
+        this.buildSitePlanner = new BuildSitePlanner(plugin, plugin.worldGuardHook());
     }
 
     public void bindSelectedNpc(Player player) {
@@ -99,30 +98,34 @@ public final class BuildService {
     }
 
     public void queueStarterHouse(Player player, UUID builderId) {
-        Optional<BuilderProfile> profile = builderNpcRegistry.find(builderId);
-        if (profile.isEmpty()) {
+        Optional<BuilderProfile> profileOptional = builderNpcRegistry.find(builderId);
+        if (profileOptional.isEmpty()) {
             Text.send(player, plugin.settings().messagePrefix(), "That NPC is not registered as a builder yet.");
             return;
         }
 
-        NPC builderNpc = getCitizensNpc(profile.get());
-        if (builderNpc == null || !builderNpc.isSpawned()) {
-            Text.send(player, plugin.settings().messagePrefix(), "Spawn the builder NPC first so it can walk over and build.");
+        BuilderProfile profile = profileOptional.get();
+        Orientation orientation = orientationFor(player.getLocation());
+        HouseSpec houseSpec = HouseSpec.starter(orientation);
+
+        Location plannerOrigin = player.getLocation();
+
+        SiteSelection siteSelection = buildSitePlanner.selectStarterHouseAnchor(player, plannerOrigin, orientation, houseSpec);
+        if (!siteSelection.found() || siteSelection.anchor() == null) {
+            Text.send(
+                    player,
+                    plugin.settings().messagePrefix(),
+                    "&c" + siteSelection.message()
+            );
+            profile.setState(BuilderState.ERROR);
+            bridgeHook.pushState(profile.identity(), BuilderState.ERROR, "No safe site found");
             return;
         }
 
-        Orientation orientation = orientationFacingPlayer(builderNpc.getStoredLocation(), player.getLocation());
-        HouseSpec houseSpec = HouseSpec.starter(orientation);
-        BuildSitePlanner.SiteSelection selection = buildSitePlanner.selectStarterHouseAnchor(player, builderNpc.getStoredLocation(), orientation, houseSpec);
-        if (!selection.found()) {
-            Text.send(player, plugin.settings().messagePrefix(), "&c" + selection.message());
-            return;
-        }
-        Location anchor = selection.anchor();
         BuildPlan plan = new BuildPlan(
                 StructureType.HOUSE,
                 "Starter 1-floor house facing the player",
-                anchor,
+                siteSelection.anchor(),
                 new Footprint(houseSpec.width(), houseSpec.depth(), 6, plugin.settings().collisionPadding()),
                 houseSpec,
                 null
@@ -130,30 +133,30 @@ public final class BuildService {
 
         ValidationResult validation = buildValidator.validate(player, plan);
         if (!validation.isAllowed()) {
-            profile.get().setState(BuilderState.ERROR);
+            profile.setState(BuilderState.ERROR);
             for (ValidationIssue issue : validation.issues()) {
                 Text.send(player, plugin.settings().messagePrefix(), "&c" + issue.message());
             }
-            bridgeHook.pushState(profile.get().identity(), BuilderState.ERROR, "Validation failed");
+            bridgeHook.pushState(profile.identity(), BuilderState.ERROR, "Validation failed");
             return;
         }
 
-        profile.get().setState(BuilderState.VALIDATING);
-        bridgeHook.pushState(profile.get().identity(), BuilderState.VALIDATING, plan.summary());
+        profile.setState(BuilderState.VALIDATING);
+        bridgeHook.pushState(profile.identity(), BuilderState.VALIDATING, plan.summary());
 
         BuildJob job = new BuildJob(builderId, player.getUniqueId(), JobType.BUILD, plan);
         buildJobManager.enqueue(job);
 
-        profile.get().setState(BuilderState.PREVIEWING);
-        bridgeHook.pushState(profile.get().identity(), BuilderState.PREVIEWING, plan.summary());
+        profile.setState(BuilderState.PREVIEWING);
+        bridgeHook.pushState(profile.identity(), BuilderState.PREVIEWING, plan.summary());
+
+        buildExecutor.executeStarterHouse(player, profile, plan, job);
 
         Text.send(
                 player,
                 plugin.settings().messagePrefix(),
                 plugin.getConfig().getString("messages.build-queued") + " &7(" + plan.summary() + ")"
         );
-
-        buildExecutor.executeStarterHouse(player, profile.get(), plan, job);
     }
 
     public void reportStatus(Player player, UUID builderId) {
@@ -178,30 +181,11 @@ public final class BuildService {
         );
     }
 
-    private NPC getCitizensNpc(BuilderProfile profile) {
-        if (!CitizensAPI.hasImplementation()) {
-            return null;
-        }
-        long least = profile.identity().npcId().getLeastSignificantBits();
-        int npcId = (int) least;
-        return CitizensAPI.getNPCRegistry().getById(npcId);
-    }
-
-
     public Orientation orientationFor(Location location) {
         float yaw = location.getYaw();
         if (yaw >= -45 && yaw < 45) return Orientation.SOUTH;
         if (yaw >= 45 && yaw < 135) return Orientation.WEST;
         if (yaw >= -135 && yaw < -45) return Orientation.EAST;
         return Orientation.NORTH;
-    }
-
-    private Orientation orientationFacingPlayer(Location npcLocation, Location playerLocation) {
-        double dx = playerLocation.getX() - npcLocation.getX();
-        double dz = playerLocation.getZ() - npcLocation.getZ();
-        if (Math.abs(dx) > Math.abs(dz)) {
-            return dx >= 0 ? Orientation.EAST : Orientation.WEST;
-        }
-        return dz >= 0 ? Orientation.SOUTH : Orientation.NORTH;
     }
 }

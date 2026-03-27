@@ -23,10 +23,12 @@ permissions:
   calickrobuilder.use:
     description: Basic builder use permission
     default: true
-
   calickrobuilder.bypass.preserve:
-    description: Lets the builder ignore preserved spawn-center checks
+    description: Lets the builder ignore preserved spawn-center or preserve-region checks
+    default: op
+  calickrobuilder.bypass.worldguard:
+    description: Lets the builder ignore allowed WorldGuard build-region checks
     default: op
   calickrobuilder.bypass.all:
-    description: Full builder bypass for future advanced checks
+    description: Full builder bypass for advanced checks
     default: op

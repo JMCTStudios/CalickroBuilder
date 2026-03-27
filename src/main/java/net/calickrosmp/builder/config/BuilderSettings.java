@@ -27,6 +27,8 @@ public final class BuilderSettings {
     private int siteMaxSideOffset;
     private int preserveWorldSpawnRadius;
     private List<Material> siteAvoidGroundMaterials;
+    private List<String> worldGuardAllowedBuildRegions;
+    private List<String> worldGuardPreserveRegions;
 
     public BuilderSettings(CalickroBuilderPlugin plugin) {
         this.plugin = plugin;
@@ -64,7 +66,21 @@ public final class BuilderSettings {
         }
         if (this.siteAvoidGroundMaterials.isEmpty()) {
             this.siteAvoidGroundMaterials.add(Material.DIRT_PATH);
+            this.siteAvoidGroundMaterials.add(Material.OAK_SLAB);
+            this.siteAvoidGroundMaterials.add(Material.SPRUCE_SLAB);
         }
+        this.worldGuardAllowedBuildRegions = normalize(config.getStringList("hooks.worldguard.allowed-build-regions"));
+        this.worldGuardPreserveRegions = normalize(config.getStringList("hooks.worldguard.preserve-regions"));
+    }
+
+    private List<String> normalize(List<String> values) {
+        List<String> normalized = new ArrayList<>();
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                normalized.add(value.trim().toLowerCase());
+            }
+        }
+        return normalized;
     }
 
     public boolean debug() { return debug; }
@@ -85,4 +101,6 @@ public final class BuilderSettings {
     public int siteMaxSideOffset() { return siteMaxSideOffset; }
     public int preserveWorldSpawnRadius() { return preserveWorldSpawnRadius; }
     public List<Material> siteAvoidGroundMaterials() { return List.copyOf(siteAvoidGroundMaterials); }
+    public List<String> worldGuardAllowedBuildRegions() { return List.copyOf(worldGuardAllowedBuildRegions); }
+    public List<String> worldGuardPreserveRegions() { return List.copyOf(worldGuardPreserveRegions); }
 }
