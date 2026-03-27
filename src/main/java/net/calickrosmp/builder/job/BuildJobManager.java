@@ -27,6 +27,38 @@ public final class BuildJobManager {
         return queue == null ? Optional.empty() : Optional.ofNullable(queue.peek());
     }
 
+    public void startCurrent(UUID builderId) {
+        current(builderId).ifPresent(job -> job.setStatus(JobStatus.RUNNING));
+    }
+
+    public void completeCurrent(UUID builderId) {
+        Queue<BuildJob> queue = jobsByBuilder.get(builderId);
+        if (queue == null) {
+            return;
+        }
+        BuildJob current = queue.poll();
+        if (current != null) {
+            current.setStatus(JobStatus.COMPLETE);
+        }
+        if (queue.isEmpty()) {
+            jobsByBuilder.remove(builderId);
+        }
+    }
+
+    public void failCurrent(UUID builderId) {
+        Queue<BuildJob> queue = jobsByBuilder.get(builderId);
+        if (queue == null) {
+            return;
+        }
+        BuildJob current = queue.poll();
+        if (current != null) {
+            current.setStatus(JobStatus.FAILED);
+        }
+        if (queue.isEmpty()) {
+            jobsByBuilder.remove(builderId);
+        }
+    }
+
     public void shutdown() {
         jobsByBuilder.clear();
     }

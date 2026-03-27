@@ -14,6 +14,8 @@ public final class BuilderSettings {
     private int collisionPadding;
     private int maxAutoRelocateDistance;
     private int blocksPerTick;
+    private int blocksPerStep;
+    private long buildIntervalTicks;
     private Material defaultPathMaterial;
     private String messagePrefix;
 
@@ -32,6 +34,8 @@ public final class BuilderSettings {
         this.collisionPadding = config.getInt("validation.collision-padding", 1);
         this.maxAutoRelocateDistance = config.getInt("validation.max-auto-relocate-distance", 16);
         this.blocksPerTick = config.getInt("build.blocks-per-tick", 25);
+        this.blocksPerStep = config.getInt("build.blocks-per-step", 1);
+        this.buildIntervalTicks = config.getLong("build.interval-ticks", 8L);
         this.defaultPathMaterial = Material.matchMaterial(config.getString("build.default-path-material", "DIRT_PATH"));
         if (this.defaultPathMaterial == null) {
             this.defaultPathMaterial = Material.DIRT_PATH;
@@ -47,6 +51,8 @@ public final class BuilderSettings {
     public int collisionPadding() { return collisionPadding; }
     public int maxAutoRelocateDistance() { return maxAutoRelocateDistance; }
     public int blocksPerTick() { return blocksPerTick; }
+    public int blocksPerStep() { return blocksPerStep; }
+    public long buildIntervalTicks() { return buildIntervalTicks; }
     public Material defaultPathMaterial() { return defaultPathMaterial; }
     public String messagePrefix() { return messagePrefix; }
 }

@@ -21,8 +21,6 @@ hooks:
 
 build:
   blocks-per-tick: 25
-  blocks-per-step: 1
-  interval-ticks: 8
   max-jobs-per-builder: 1
   default-foundation-depth: 2
   default-path-material: DIRT_PATH
