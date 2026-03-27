@@ -2,7 +2,7 @@
 
 Foundation build for your NPC builder plugin.
 
-## What this starter includes
+## CalickroSMP
 - Paper 1.21.11 / Java 21 plugin skeleton
 - `/cali builder` command tree
 - builder registry and job manager
