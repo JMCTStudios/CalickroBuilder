@@ -25,45 +25,105 @@ public final class BuildSitePlanner {
     }
 
     public SiteSelection selectStarterHouseSite(Player requester, Location origin, Orientation preferredOrientation, HouseSpec spec) {
-        if (origin == null || origin.getWorld() == null) {
+        GroundedOrigin grounded = groundOrigin(origin);
+        if (!grounded.valid()) {
             return SiteSelection.failure("I don't know where to start building from yet.");
         }
 
-        List<Orientation> orientations = orderedOrientations(origin, preferredOrientation);
-        List<Location> searchOrigins = searchOrigins(origin);
-        SiteSelection bestCandidate = null;
-
-        for (Location searchOrigin : searchOrigins) {
-            for (Orientation orientation : orientations) {
-                SiteSelection candidate = selectStarterHouseAnchor(requester, searchOrigin, orientation, spec);
-                if (!candidate.found()) {
-                    continue;
-                }
-
-                int score = scoreOrientation(requester, candidate.anchor(), orientation, spec)
-                        - (int) Math.round(candidate.anchor().distanceSquared(origin));
-                candidate = candidate.withScore(score);
-
-                if (bestCandidate == null || candidate.score() > bestCandidate.score()) {
-                    bestCandidate = candidate;
+        SiteSelection best = null;
+        List<Location> origins = searchOrigins(grounded.location());
+        for (Location searchOrigin : origins) {
+            for (Orientation orientation : orderedOrientations(searchOrigin, preferredOrientation)) {
+                for (ScoredCandidate candidate : collectCandidates(requester, searchOrigin, orientation, spec)) {
+                    if (best == null || candidate.score() > best.score()) {
+                        best = SiteSelection.success(candidate.anchor(), candidate.orientation(), candidate.reason()).withScore(candidate.score());
+                    }
                 }
             }
         }
 
-        if (bestCandidate != null) {
-            return bestCandidate;
+        if (best != null) {
+            return best;
         }
-        return SiteSelection.failure("I couldn't find a safe build spot nearby. Move me away from roads or reduce preserve restrictions.");
+        return SiteSelection.failure("I couldn't find a safe build spot nearby. Move me away from roads or spread the builds out more.");
     }
 
-    public SiteSelection selectStarterHouseAnchor(Player requester, Location npcLocation, Orientation orientation, HouseSpec spec) {
-        if (npcLocation == null || npcLocation.getWorld() == null) {
-            return SiteSelection.failure("I don't know where to start building from yet.");
+    public ScanReport scanArea(Player requester, Location origin, Orientation preferredOrientation, HouseSpec spec) {
+        GroundedOrigin grounded = groundOrigin(origin);
+        if (!grounded.valid()) {
+            return new ScanReport(false, "No valid origin to scan from.", List.of());
         }
 
-        World world = npcLocation.getWorld();
+        List<String> details = new ArrayList<>();
+        details.add("Requested origin: " + simple(origin));
+        details.add("Grounded origin: " + simple(grounded.location()));
+        details.add("Preferred orientation: " + preferredOrientation);
+        details.add("Search distance: " + plugin.settings().siteSearchMinDistance() + "-" + plugin.settings().siteSearchMaxDistance());
+        details.add("House gap: " + plugin.settings().siteMinHouseGap() + " | Road clearance: " + plugin.settings().siteRoadClearance());
+
+        SiteSelection best = null;
+        int checked = 0;
+        int blockedRoad = 0;
+        int blockedGround = 0;
+        int blockedHeadroom = 0;
+        int blockedStructure = 0;
+        int blockedPreserve = 0;
+        int blockedWorldGuard = 0;
+
+        List<Location> origins = searchOrigins(grounded.location());
+        for (Location searchOrigin : origins) {
+            for (Orientation orientation : orderedOrientations(searchOrigin, preferredOrientation)) {
+                for (CandidateCheck candidateCheck : collectCandidateChecks(requester, searchOrigin, orientation, spec)) {
+                    if (candidateCheck.allowed()) {
+                        checked++;
+                        if (best == null || candidateCheck.score() > best.score()) {
+                            best = SiteSelection.success(candidateCheck.anchor(), candidateCheck.orientation(), candidateCheck.reason()).withScore(candidateCheck.score());
+                        }
+                    } else {
+                        switch (candidateCheck.reasonCode()) {
+                            case ROAD -> blockedRoad++;
+                            case GROUND -> blockedGround++;
+                            case HEADROOM -> blockedHeadroom++;
+                            case STRUCTURE -> blockedStructure++;
+                            case PRESERVE -> blockedPreserve++;
+                            case WORLDGUARD -> blockedWorldGuard++;
+                            default -> { }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (best != null) {
+            details.add("Valid candidates: " + checked);
+            details.add("Best anchor: " + simple(best.anchor()) + " facing " + best.orientation());
+            details.add("Score: " + best.score());
+            return new ScanReport(true, "Found a valid build plot.", details);
+        }
+
+        details.add("Valid candidates: 0");
+        details.add("Rejected by road: " + blockedRoad);
+        details.add("Rejected by ground: " + blockedGround);
+        details.add("Rejected by headroom: " + blockedHeadroom);
+        details.add("Rejected by structure spacing: " + blockedStructure);
+        details.add("Rejected by preserve: " + blockedPreserve);
+        details.add("Rejected by WorldGuard: " + blockedWorldGuard);
+        return new ScanReport(false, "No valid build plot found from the current search area.", details);
+    }
+
+    private List<ScoredCandidate> collectCandidates(Player requester, Location origin, Orientation orientation, HouseSpec spec) {
+        List<ScoredCandidate> candidates = new ArrayList<>();
+        for (CandidateCheck check : collectCandidateChecks(requester, origin, orientation, spec)) {
+            if (check.allowed()) {
+                candidates.add(new ScoredCandidate(check.anchor(), check.orientation(), check.reason(), check.score()));
+            }
+        }
+        return candidates;
+    }
+
+    private List<CandidateCheck> collectCandidateChecks(Player requester, Location origin, Orientation orientation, HouseSpec spec) {
+        List<CandidateCheck> checks = new ArrayList<>();
         int width = spec.width();
-        int depth = spec.depth();
         int doorX = width / 2;
         int minDistance = plugin.settings().siteSearchMinDistance();
         int maxDistance = plugin.settings().siteSearchMaxDistance();
@@ -74,50 +134,83 @@ public final class BuildSitePlanner {
             for (int side = 0; side <= maxSideOffset; side += lateralStep) {
                 int[] offsets = side == 0 ? new int[]{0} : new int[]{side, -side};
                 for (int sideOffset : offsets) {
-                    Location candidate = anchorFromOffsets(npcLocation, orientation, doorX, forward, sideOffset);
-                    SiteCheckResult check = isValidAnchor(requester, world, candidate, orientation, width, depth);
-                    if (check.allowed()) {
-                        return SiteSelection.success(candidate, orientation, check.reason());
+                    Location candidate = anchorFromOffsets(origin, orientation, doorX, forward, sideOffset);
+                    SiteCheckResult check = isValidAnchor(requester, origin.getWorld(), candidate, orientation, spec.width(), spec.depth());
+                    if (!check.allowed()) {
+                        checks.add(new CandidateCheck(candidate, orientation, check.reason(), 0, false, check.reasonCode()));
+                        continue;
                     }
+                    int score = scoreCandidate(origin, candidate, orientation, spec);
+                    checks.add(new CandidateCheck(candidate, orientation, check.reason(), score, true, ReasonCode.NONE));
                 }
             }
         }
+        return checks;
+    }
 
-        return SiteSelection.failure("I couldn't find a safe build spot nearby. Move me away from roads or reduce preserve restrictions.");
+    private int scoreCandidate(Location origin, Location anchor, Orientation orientation, HouseSpec spec) {
+        int score = 0;
+        Location frontDoorOutside = frontOutside(anchor, orientation, spec.width());
+        int roadDistance = nearestRoadDistance(frontDoorOutside, plugin.settings().siteRoadPreferenceDistance());
+        if (roadDistance >= 0) {
+            score += 1200 - (roadDistance * 60);
+        } else {
+            score -= 250;
+        }
+
+        Location spawn = anchor.getWorld().getSpawnLocation();
+        if (wouldFaceTowardSpawn(anchor, orientation, spawn)) {
+            score -= 400;
+        }
+
+        double originDistance = origin.distanceSquared(anchor);
+        score -= Math.min(220, (int) originDistance / 4);
+
+        int nearbyStructures = countNearbyStructureBlocks(anchor, orientation, spec.width(), spec.depth(), plugin.settings().siteMinHouseGap());
+        score -= nearbyStructures * 12;
+        score -= nearestWallPenalty(anchor, spec.width(), spec.depth());
+        return score;
     }
 
     private List<Location> searchOrigins(Location origin) {
         List<Location> origins = new ArrayList<>();
-        origins.add(normalizeOrigin(origin));
-
-        int maxRelocate = Math.max(6, plugin.settings().maxAutoRelocateDistance());
-        int step = Math.max(4, plugin.settings().siteLateralStep() * 2);
-        int[] distances = new int[]{step, step * 2, Math.max(step * 3, maxRelocate)};
-
-        for (int distance : distances) {
-            if (distance <= 0 || distance > maxRelocate + step) {
-                continue;
-            }
-            origins.add(normalizeOrigin(origin.clone().add(distance, 0, 0)));
-            origins.add(normalizeOrigin(origin.clone().add(-distance, 0, 0)));
-            origins.add(normalizeOrigin(origin.clone().add(0, 0, distance)));
-            origins.add(normalizeOrigin(origin.clone().add(0, 0, -distance)));
-            origins.add(normalizeOrigin(origin.clone().add(distance, 0, distance)));
-            origins.add(normalizeOrigin(origin.clone().add(-distance, 0, distance)));
-            origins.add(normalizeOrigin(origin.clone().add(distance, 0, -distance)));
-            origins.add(normalizeOrigin(origin.clone().add(-distance, 0, -distance)));
+        origins.add(origin.clone());
+        int radius = Math.max(3, plugin.settings().siteSearchMinDistance() / 2);
+        int extended = Math.max(radius + 4, plugin.settings().siteSearchMinDistance());
+        int far = Math.max(extended + 6, plugin.settings().siteSearchMinDistance() + 8);
+        int[] rings = new int[]{radius, extended, far};
+        for (int ring : rings) {
+            origins.add(origin.clone().add(ring, 0, 0));
+            origins.add(origin.clone().add(-ring, 0, 0));
+            origins.add(origin.clone().add(0, 0, ring));
+            origins.add(origin.clone().add(0, 0, -ring));
+            origins.add(origin.clone().add(ring, 0, ring));
+            origins.add(origin.clone().add(-ring, 0, ring));
+            origins.add(origin.clone().add(ring, 0, -ring));
+            origins.add(origin.clone().add(-ring, 0, -ring));
         }
         return origins;
     }
 
-    private Location normalizeOrigin(Location location) {
-        if (location == null || location.getWorld() == null) {
-            return location;
+    private GroundedOrigin groundOrigin(Location origin) {
+        if (origin == null || origin.getWorld() == null) {
+            return new GroundedOrigin(false, null);
         }
-        int x = location.getBlockX();
-        int z = location.getBlockZ();
-        int topY = location.getWorld().getHighestBlockYAt(x, z);
-        return new Location(location.getWorld(), x + 0.5, topY + 1.0, z + 0.5, location.getYaw(), location.getPitch());
+
+        Location grounded = origin.clone();
+        int startY = Math.min(origin.getWorld().getMaxHeight() - 2, origin.getBlockY());
+        int minY = Math.max(origin.getWorld().getMinHeight(), startY - 64);
+        for (int y = startY; y >= minY; y--) {
+            Location sample = new Location(origin.getWorld(), origin.getX(), y, origin.getZ());
+            Block below = sample.clone().add(0, -1, 0).getBlock();
+            Block feet = sample.getBlock();
+            Block head = sample.clone().add(0, 1, 0).getBlock();
+            if (below.getType().isSolid() && (feet.isPassable() || feet.getType().isAir()) && (head.isPassable() || head.getType().isAir())) {
+                grounded.setY(sample.getY());
+                return new GroundedOrigin(true, grounded);
+            }
+        }
+        return new GroundedOrigin(false, null);
     }
 
     private List<Orientation> orderedOrientations(Location origin, Orientation preferredOrientation) {
@@ -148,40 +241,6 @@ public final class BuildSitePlanner {
         return dz >= 0 ? Orientation.SOUTH : Orientation.NORTH;
     }
 
-    private int scoreOrientation(Player requester, Location anchor, Orientation orientation, HouseSpec spec) {
-        int score = 0;
-        List<Material> avoid = plugin.settings().siteAvoidGroundMaterials();
-        Location spawn = anchor.getWorld().getSpawnLocation();
-        Location frontDoorOutside = frontOutside(anchor, orientation, spec.width());
-
-        for (int i = 1; i <= 6; i++) {
-            Location probe = frontDoorOutside.clone();
-            switch (orientation) {
-                case SOUTH -> probe.add(0, 0, -i);
-                case NORTH -> probe.add(0, 0, i);
-                case EAST -> probe.add(-i, 0, 0);
-                case WEST -> probe.add(i, 0, 0);
-            }
-            Material below = probe.clone().add(0, -1, 0).getBlock().getType();
-            Material at = probe.getBlock().getType();
-            if (avoid.contains(at) || avoid.contains(below)) {
-                score += 1000 - (i * 80);
-                break;
-            }
-        }
-
-        double dx = frontDoorOutside.getX() - spawn.getX();
-        double dz = frontDoorOutside.getZ() - spawn.getZ();
-        double distSq = (dx * dx) + (dz * dz);
-        score += Math.min(250, (int) distSq / 4);
-
-        if (!worldGuardHook.canBypassPreserve(requester) && wouldFaceTowardSpawn(anchor, orientation, spawn)) {
-            score -= 600;
-        }
-
-        return score;
-    }
-
     private boolean wouldFaceTowardSpawn(Location anchor, Orientation orientation, Location spawn) {
         Location front = frontOutside(anchor, orientation, 15);
         double frontDist = front.distanceSquared(spawn);
@@ -194,6 +253,59 @@ public final class BuildSitePlanner {
         return frontDist < backDist;
     }
 
+    private int nearestRoadDistance(Location from, int maxDistance) {
+        Set<Material> avoid = new HashSet<>(plugin.settings().siteAvoidGroundMaterials());
+        for (int distance = 0; distance <= maxDistance; distance++) {
+            for (int dx = -distance; dx <= distance; dx++) {
+                for (int dz = -distance; dz <= distance; dz++) {
+                    if (Math.abs(dx) + Math.abs(dz) != distance) {
+                        continue;
+                    }
+                    Material at = from.clone().add(dx, 0, dz).getBlock().getType();
+                    Material below = from.clone().add(dx, -1, dz).getBlock().getType();
+                    if (avoid.contains(at) || avoid.contains(below)) {
+                        return distance;
+                    }
+                }
+            }
+        }
+        return -1;
+    }
+
+    private int nearestWallPenalty(Location anchor, int width, int depth) {
+        int testRadius = Math.max(width, depth) + 4;
+        int penalty = 0;
+        for (int dx = -testRadius; dx <= testRadius; dx++) {
+            Material type = anchor.clone().add(dx, 0, 0).getBlock().getType();
+            if (isLikelyWall(type)) {
+                penalty += 4;
+            }
+        }
+        for (int dz = -testRadius; dz <= testRadius; dz++) {
+            Material type = anchor.clone().add(0, 0, dz).getBlock().getType();
+            if (isLikelyWall(type)) {
+                penalty += 4;
+            }
+        }
+        return penalty;
+    }
+
+    private int countNearbyStructureBlocks(Location anchor, Orientation orientation, int width, int depth, int gap) {
+        int count = 0;
+        int padding = plugin.settings().collisionPadding() + gap;
+        for (int localX = -padding; localX < width + padding; localX++) {
+            for (int localZ = -padding; localZ < depth + padding; localZ++) {
+                Location sample = rotate(anchor, orientation, localX, 0, localZ);
+                Material floor = sample.getBlock().getType();
+                Material above = sample.clone().add(0, 1, 0).getBlock().getType();
+                if (isLikelyStructure(floor) || isLikelyStructure(above)) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
     private Location frontOutside(Location anchor, Orientation orientation, int width) {
         int doorX = width / 2;
         return switch (orientation) {
@@ -204,8 +316,8 @@ public final class BuildSitePlanner {
         };
     }
 
-    private Location anchorFromOffsets(Location npcLocation, Orientation orientation, int doorX, int forward, int sideOffset) {
-        Location base = npcLocation.clone();
+    private Location anchorFromOffsets(Location origin, Orientation orientation, int doorX, int forward, int sideOffset) {
+        Location base = origin.clone();
         return switch (orientation) {
             case SOUTH -> base.add(-(doorX + 0.5) + sideOffset, 0, forward);
             case NORTH -> base.add((doorX + 0.5) - sideOffset, 0, -forward);
@@ -218,18 +330,19 @@ public final class BuildSitePlanner {
         Set<Material> avoid = new HashSet<>(plugin.settings().siteAvoidGroundMaterials());
         int padding = plugin.settings().collisionPadding();
         int preserveRadius = plugin.settings().preserveWorldSpawnRadius();
+        int spacingPadding = padding + plugin.settings().siteMinHouseGap();
+        int roadClearance = Math.max(0, plugin.settings().siteRoadClearance());
         boolean bypassPreserve = requester.hasPermission("calickrobuilder.bypass.preserve") || requester.hasPermission("calickrobuilder.bypass.all");
 
         Location spawn = world.getSpawnLocation();
 
         WorldGuardHook.ValidationScan wgScan = worldGuardHook.scanPlan(requester, anchor, orientation, width, depth, padding);
         if (!wgScan.allowed()) {
-            return SiteCheckResult.blocked(wgScan.message());
+            return SiteCheckResult.blocked("WorldGuard rejected that plot.", ReasonCode.WORLDGUARD);
         }
 
-        for (int localX = -padding; localX < width + padding; localX++) {
-            for (int localZ = -padding; localZ < depth + padding; localZ++) {
-                boolean inFootprint = localX >= 0 && localX < width && localZ >= 0 && localZ < depth;
+        for (int localX = -spacingPadding; localX < width + spacingPadding; localX++) {
+            for (int localZ = -spacingPadding; localZ < depth + spacingPadding; localZ++) {
                 Location sample = rotate(anchor, orientation, localX, 0, localZ);
                 Block floor = sample.getBlock();
                 Block below = sample.clone().add(0, -1, 0).getBlock();
@@ -240,44 +353,63 @@ public final class BuildSitePlanner {
                     double dx = sample.getX() - spawn.getX();
                     double dz = sample.getZ() - spawn.getZ();
                     if ((dx * dx) + (dz * dz) <= (preserveRadius * preserveRadius)) {
-                        return SiteCheckResult.blocked("That spot would touch the preserved spawn center.");
+                        return SiteCheckResult.blocked("That spot would touch the preserved spawn center.", ReasonCode.PRESERVE);
                     }
                 }
 
-                if (inFootprint && (avoid.contains(floor.getType()) || avoid.contains(below.getType()))) {
-                    return SiteCheckResult.blocked("That spot would build on a road or protected path.");
+                boolean insideStructure = localX >= 0 && localX < width && localZ >= 0 && localZ < depth;
+                boolean insideRoadClearance = localX >= -roadClearance && localX < width + roadClearance
+                        && localZ >= -roadClearance && localZ < depth + roadClearance;
+
+                if (insideRoadClearance && roadClearance > 0 && (avoid.contains(floor.getType()) || avoid.contains(below.getType()))) {
+                    return SiteCheckResult.blocked("That spot would build on a road or protected path.", ReasonCode.ROAD);
                 }
 
-                if (below.isLiquid() || floor.isLiquid()) {
-                    return SiteCheckResult.blocked("That spot is too wet to build on.");
+                if (insideStructure) {
+                    if (below.isLiquid() || floor.isLiquid()) {
+                        return SiteCheckResult.blocked("That spot is too wet to build on.", ReasonCode.GROUND);
+                    }
+                    if (!below.getType().isSolid()) {
+                        return SiteCheckResult.blocked("That spot doesn't have solid ground under it.", ReasonCode.GROUND);
+                    }
+                    if (!(head.isPassable() || head.getType().isAir())) {
+                        return SiteCheckResult.blocked("That spot is blocked above ground.", ReasonCode.HEADROOM);
+                    }
+                    if (!(aboveHead.isPassable() || aboveHead.getType().isAir())) {
+                        return SiteCheckResult.blocked("That spot doesn't have enough headroom.", ReasonCode.HEADROOM);
+                    }
                 }
 
-                if (!below.getType().isSolid()) {
-                    return SiteCheckResult.blocked("That spot doesn't have solid ground under it.");
+                if (!insideStructure && (isLikelyStructure(floor.getType()) || isLikelyStructure(head.getType()))) {
+                    return SiteCheckResult.blocked("That plot is too close to an existing structure.", ReasonCode.STRUCTURE);
                 }
-
-                if (inFootprint && !(head.isPassable() || head.getType().isAir())) {
-                    return SiteCheckResult.blocked("That spot is blocked above ground.");
-                }
-                if (inFootprint && !(aboveHead.isPassable() || aboveHead.getType().isAir())) {
-                    return SiteCheckResult.blocked("That spot doesn't have enough headroom.");
-                }
-            }
-        }
-
-        List<Location> porchChecks = switch (orientation) {
-            case SOUTH -> List.of(anchor.clone().add(width / 2.0, 0, -1.0));
-            case NORTH -> List.of(anchor.clone().add(-(width / 2.0), 0, 1.0));
-            case EAST -> List.of(anchor.clone().add(-1.0, 0, -(width / 2.0)));
-            case WEST -> List.of(anchor.clone().add(1.0, 0, (width / 2.0)));
-        };
-        for (Location porch : porchChecks) {
-            if (avoid.contains(porch.getBlock().getType()) || avoid.contains(porch.clone().add(0, -1, 0).getBlock().getType())) {
-                return SiteCheckResult.blocked("That front door would open directly onto a protected path.");
             }
         }
 
         return SiteCheckResult.allowed("Build site selected");
+    }
+
+    private boolean isLikelyWall(Material material) {
+        return switch (material) {
+            case POLISHED_ANDESITE, STONE_BRICKS, ANDESITE, COBBLESTONE, DEEPSLATE_BRICKS, CRACKED_DEEPSLATE_BRICKS -> true;
+            default -> false;
+        };
+    }
+
+    private boolean isLikelyStructure(Material material) {
+        if (material == null || material.isAir()) {
+            return false;
+        }
+        return switch (material) {
+            case COBBLESTONE, MOSSY_COBBLESTONE, STONE_BRICKS, CRACKED_STONE_BRICKS,
+                    OAK_PLANKS, SPRUCE_PLANKS, BIRCH_PLANKS, JUNGLE_PLANKS, ACACIA_PLANKS, DARK_OAK_PLANKS,
+                    MANGROVE_PLANKS, CHERRY_PLANKS, BAMBOO_PLANKS,
+                    OAK_SLAB, SPRUCE_SLAB, COBBLESTONE_SLAB, STONE_BRICK_SLAB,
+                    OAK_STAIRS, SPRUCE_STAIRS, COBBLESTONE_STAIRS, STONE_BRICK_STAIRS,
+                    GLASS, GLASS_PANE, OAK_DOOR, SPRUCE_DOOR, IRON_DOOR,
+                    TORCH, LANTERN, CHEST, BARREL, CRAFTING_TABLE, FURNACE -> true;
+            default -> false;
+        };
     }
 
     private Location rotate(Location base, Orientation orientation, int localX, int localY, int localZ) {
@@ -288,6 +420,15 @@ public final class BuildSitePlanner {
             case WEST -> base.clone().add(-localZ, localY, localX);
         };
     }
+
+    private String simple(Location location) {
+        return location.getBlockX() + ", " + location.getBlockY() + ", " + location.getBlockZ();
+    }
+
+    private record ScoredCandidate(Location anchor, Orientation orientation, String reason, int score) {}
+    private record CandidateCheck(Location anchor, Orientation orientation, String reason, int score, boolean allowed, ReasonCode reasonCode) {}
+    private record GroundedOrigin(boolean valid, Location location) {}
+    private enum ReasonCode { NONE, ROAD, GROUND, HEADROOM, STRUCTURE, PRESERVE, WORLDGUARD }
 
     public record SiteSelection(boolean found, Location anchor, Orientation orientation, String message, int score) {
         public static SiteSelection success(Location anchor, Orientation orientation, String message) {
@@ -303,13 +444,15 @@ public final class BuildSitePlanner {
         }
     }
 
-    private record SiteCheckResult(boolean allowed, String reason) {
+    public record ScanReport(boolean success, String summary, List<String> details) {}
+
+    private record SiteCheckResult(boolean allowed, String reason, ReasonCode reasonCode) {
         static SiteCheckResult allowed(String reason) {
-            return new SiteCheckResult(true, reason);
+            return new SiteCheckResult(true, reason, ReasonCode.NONE);
         }
 
-        static SiteCheckResult blocked(String reason) {
-            return new SiteCheckResult(false, reason);
+        static SiteCheckResult blocked(String reason, ReasonCode reasonCode) {
+            return new SiteCheckResult(false, reason, reasonCode);
         }
     }
 }

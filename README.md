@@ -1,23 +1,20 @@
-# CalickroBuilder Phase 3
+# CalickroBuilder Phase 4.2
 
-Foundation build for your NPC builder plugin.
+This phase focuses on placement debugging and tuning.
 
-## What this starter includes
-- Paper 1.21.11 / Java 21 plugin skeleton
-- `/cali builder` command tree
-- builder registry and job manager
-- provider abstraction layer for Citizens / FancyNPCs / future providers
-- build plan / build spec model
-- preflight validation pipeline
-- WorldGuard / GriefPrevention hook placeholders
-- YAML config scaffolding
+## Working
+- Builder binding
+- Walk before build
+- Adaptive search attempts
+- WorldGuard-aware placement baseline
+- Scan diagnostics
 
-## What this starter intentionally does not do yet
-- real Citizens trait registration
-- real FancyNPCs integration
-- real WorldGuard / GriefPrevention API calls
-- procedural house generation
-- actual block placement
-- AI prompt parsing
+## Added in 4.2
+- Grounded build-site origin
+- Better scan diagnostics with rejection counts
+- Less aggressive road/spacing defaults
 
-This foundation is set up so those can be dropped in cleanly instead of becoming one giant messy class.
+## Still needs work
+- Smarter village layout
+- Better road-facing lot preference
+- Role-based NPC housing

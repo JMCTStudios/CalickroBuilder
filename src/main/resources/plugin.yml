@@ -23,6 +23,9 @@ permissions:
   calickrobuilder.use:
     description: Basic builder use permission
     default: true
+  calickrobuilder.speed:
+    description: Lets admins change builder speed at runtime
+    default: op
   calickrobuilder.bypass.preserve:
     description: Lets the builder ignore preserved spawn-center or preserve-region checks
     default: op

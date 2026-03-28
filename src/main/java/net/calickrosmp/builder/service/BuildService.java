@@ -3,6 +3,7 @@ package net.calickrosmp.builder.service;
 import net.calickrosmp.builder.CalickroBuilderPlugin;
 import net.calickrosmp.builder.build.BuildExecutor;
 import net.calickrosmp.builder.build.BuildSitePlanner;
+import net.calickrosmp.builder.build.BuildSitePlanner.ScanReport;
 import net.calickrosmp.builder.build.BuildSitePlanner.SiteSelection;
 import net.calickrosmp.builder.hook.CalickroNpcBridgeHook;
 import net.calickrosmp.builder.job.BuildJob;
@@ -63,11 +64,7 @@ public final class BuildService {
         NpcProvider provider = npcProviderRegistry.activeProvider();
 
         if (!provider.isAvailable()) {
-            Text.send(
-                    player,
-                    plugin.settings().messagePrefix(),
-                    plugin.getConfig().getString("messages.provider-not-ready", "That NPC provider is not ready yet.")
-            );
+            Text.send(player, plugin.settings().messagePrefix(), plugin.getConfig().getString("messages.provider-not-ready", "That NPC provider is not ready yet."));
             return;
         }
 
@@ -80,11 +77,7 @@ public final class BuildService {
         }
 
         if (!provider.attachBuilderRole(player, selectedId.get())) {
-            Text.send(
-                    player,
-                    plugin.settings().messagePrefix(),
-                    "I found the selected NPC, but could not attach the builder role yet."
-            );
+            Text.send(player, plugin.settings().messagePrefix(), "I found the selected NPC, but could not attach the builder role yet.");
             return;
         }
 
@@ -92,11 +85,7 @@ public final class BuildService {
         BuilderProfile profile = builderNpcRegistry.register(identity);
         profile.setState(BuilderState.IDLE);
 
-        Text.send(
-                player,
-                plugin.settings().messagePrefix(),
-                "Builder bound to NPC &e" + identity.displayName() + "&r with provider &b" + provider.name() + "&r."
-        );
+        Text.send(player, plugin.settings().messagePrefix(), "Builder bound to NPC &e" + identity.displayName() + "&r with provider &b" + provider.name() + "&r.");
     }
 
     public void queueStarterHouse(Player player, UUID builderId) {
@@ -110,14 +99,10 @@ public final class BuildService {
         Orientation preferredOrientation = orientationFor(player.getLocation());
         HouseSpec initialSpec = HouseSpec.starter(preferredOrientation);
 
-        Location plannerOrigin = resolvePlannerOrigin(player, profile);
+        Location plannerOrigin = resolveBuilderLocation(profile).orElse(player.getLocation());
         SiteSelection siteSelection = buildSitePlanner.selectStarterHouseSite(player, plannerOrigin, preferredOrientation, initialSpec);
         if (!siteSelection.found() || siteSelection.anchor() == null || siteSelection.orientation() == null) {
-            Text.send(
-                    player,
-                    plugin.settings().messagePrefix(),
-                    "&c" + siteSelection.message()
-            );
+            Text.send(player, plugin.settings().messagePrefix(), "&c" + siteSelection.message());
             profile.setState(BuilderState.ERROR);
             bridgeHook.pushState(profile.identity(), BuilderState.ERROR, "No safe site found");
             return;
@@ -154,36 +139,26 @@ public final class BuildService {
 
         buildExecutor.executeStarterHouse(player, profile, plan, job);
 
-        Text.send(
-                player,
-                plugin.settings().messagePrefix(),
-                plugin.getConfig().getString("messages.build-queued") + " &7(" + plan.summary() + ")"
-        );
+        Text.send(player, plugin.settings().messagePrefix(), plugin.getConfig().getString("messages.build-queued") + " &7(" + plan.summary() + ")");
     }
 
-    private Location resolvePlannerOrigin(Player player, BuilderProfile profile) {
-        if (CitizensAPI.hasImplementation()) {
-            long least = profile.identity().npcId().getLeastSignificantBits();
-            NPC npc = CitizensAPI.getNPCRegistry().getById((int) least);
-            if (npc != null && npc.isSpawned() && npc.getEntity() != null) {
-                Location npcLocation = npc.getEntity().getLocation().clone();
-                Location snapped = snapToGround(npcLocation);
-                return snapped != null ? snapped : npcLocation;
-            }
+    public void scanCurrentArea(Player player, UUID builderId) {
+        Optional<BuilderProfile> profileOptional = builderNpcRegistry.find(builderId);
+        if (profileOptional.isEmpty()) {
+            Text.send(player, plugin.settings().messagePrefix(), "That NPC is not registered as a builder yet.");
+            return;
         }
-        Location fallback = player.getLocation().clone();
-        Location snapped = snapToGround(fallback);
-        return snapped != null ? snapped : fallback;
-    }
 
-    private Location snapToGround(Location location) {
-        if (location == null || location.getWorld() == null) {
-            return location;
+        BuilderProfile profile = profileOptional.get();
+        Orientation preferredOrientation = orientationFor(player.getLocation());
+        HouseSpec spec = HouseSpec.starter(preferredOrientation);
+        Location origin = resolveBuilderLocation(profile).orElse(player.getLocation());
+        ScanReport report = buildSitePlanner.scanArea(player, origin, preferredOrientation, spec);
+
+        Text.send(player, plugin.settings().messagePrefix(), (report.success() ? "&a" : "&c") + report.summary());
+        for (String line : report.details()) {
+            Text.send(player, plugin.settings().messagePrefix(), "&7- " + line);
         }
-        int x = location.getBlockX();
-        int z = location.getBlockZ();
-        int topY = location.getWorld().getHighestBlockYAt(x, z);
-        return new Location(location.getWorld(), x + 0.5, topY + 1.0, z + 0.5, location.getYaw(), location.getPitch());
     }
 
     public void reportStatus(Player player, UUID builderId) {
@@ -206,6 +181,17 @@ public final class BuildService {
                         + "&r provider=&b" + profile.get().identity().providerType()
                         + "&r job=&7" + jobInfo
         );
+    }
+
+    private Optional<Location> resolveBuilderLocation(BuilderProfile profile) {
+        try {
+            NPC npc = CitizensAPI.getNPCRegistry().getByUniqueIdGlobal(profile.identity().npcId());
+            if (npc != null && npc.isSpawned() && npc.getEntity() != null) {
+                return Optional.of(npc.getEntity().getLocation());
+            }
+        } catch (Throwable ignored) {
+        }
+        return Optional.empty();
     }
 
     public Orientation orientationFor(Location location) {

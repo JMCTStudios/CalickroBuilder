@@ -22,11 +22,14 @@ hooks:
     enabled: true
 
 site-planner:
-  search-min-distance: 10
-  search-max-distance: 28
+  search-min-distance: 0
+  search-max-distance: 48
   lateral-step: 2
-  max-side-offset: 16
+  max-side-offset: 24
   preserve-world-spawn-radius: 8
+  min-house-gap: 1
+  road-preference-distance: 12
+  road-clearance: 0
   avoid-ground-materials:
     - DIRT_PATH
     - OAK_SLAB

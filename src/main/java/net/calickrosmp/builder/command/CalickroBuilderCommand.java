@@ -42,38 +42,31 @@ public final class CalickroBuilderCommand implements CommandExecutor, TabComplet
         }
 
         if (args.length == 0 || !args[0].equalsIgnoreCase("builder")) {
-            Text.send(player, plugin.settings().messagePrefix(), "Usage: /cali builder <bind|provider|status|testhouse|reload>");
+            Text.send(player, plugin.settings().messagePrefix(), "Usage: /cali builder <bind|provider|status|testhouse|scan|speed|reload>");
             return true;
         }
 
         if (args.length == 1) {
-            Text.send(player, plugin.settings().messagePrefix(), "Usage: /cali builder <bind|provider|status|testhouse|reload>");
+            Text.send(player, plugin.settings().messagePrefix(), "Usage: /cali builder <bind|provider|status|testhouse|scan|speed|reload>");
             return true;
         }
 
         switch (args[1].toLowerCase()) {
             case "bind" -> buildService.bindSelectedNpc(player);
-            case "provider" -> Text.send(
-                    player,
-                    plugin.settings().messagePrefix(),
-                    "Active provider: &e" + npcProviderRegistry.getActiveProviderName()
-            );
+            case "provider" -> Text.send(player, plugin.settings().messagePrefix(), "Active provider: &e" + npcProviderRegistry.getActiveProviderName());
             case "status" -> getBoundBuilderId(player).ifPresentOrElse(
                     id -> buildService.reportStatus(player, id),
-                    () -> Text.send(
-                            player,
-                            plugin.settings().messagePrefix(),
-                            "Select a Citizens NPC with /npc select <name>, then bind it with /cali builder bind."
-                    )
+                    () -> Text.send(player, plugin.settings().messagePrefix(), "Select a Citizens NPC with /npc select <name>, then bind it with /cali builder bind.")
             );
             case "testhouse" -> getBoundBuilderId(player).ifPresentOrElse(
                     id -> buildService.queueStarterHouse(player, id),
-                    () -> Text.send(
-                            player,
-                            plugin.settings().messagePrefix(),
-                            "Bind a builder first with /cali builder bind after selecting an NPC."
-                    )
+                    () -> Text.send(player, plugin.settings().messagePrefix(), "Bind a builder first with /cali builder bind after selecting an NPC.")
             );
+            case "scan" -> getBoundBuilderId(player).ifPresentOrElse(
+                    id -> buildService.scanCurrentArea(player, id),
+                    () -> Text.send(player, plugin.settings().messagePrefix(), "Bind a builder first with /cali builder bind after selecting an NPC.")
+            );
+            case "speed" -> handleSpeed(player, args);
             case "reload" -> {
                 plugin.reloadPlugin();
                 Text.send(player, plugin.settings().messagePrefix(), "Config reloaded.");
@@ -82,6 +75,35 @@ public final class CalickroBuilderCommand implements CommandExecutor, TabComplet
         }
 
         return true;
+    }
+
+    private void handleSpeed(Player player, String[] args) {
+        if (!player.hasPermission("calickrobuilder.admin") && !player.hasPermission("calickrobuilder.speed")) {
+            Text.send(player, plugin.settings().messagePrefix(), "&cYou do not have permission to change build speed.");
+            return;
+        }
+
+        if (args.length < 3) {
+            Text.send(player, plugin.settings().messagePrefix(), "Current build interval: &e" + plugin.settings().buildIntervalTicks() + "&r ticks per step.");
+            Text.send(player, plugin.settings().messagePrefix(), "Usage: /cali builder speed <ticks>");
+            return;
+        }
+
+        long ticks;
+        try {
+            ticks = Long.parseLong(args[2]);
+        } catch (NumberFormatException ex) {
+            Text.send(player, plugin.settings().messagePrefix(), "&cBuild speed must be a whole number of ticks.");
+            return;
+        }
+
+        if (ticks < 1L || ticks > 100L) {
+            Text.send(player, plugin.settings().messagePrefix(), "&cPick a speed between 1 and 100 ticks.");
+            return;
+        }
+
+        plugin.settings().setBuildIntervalTicks(ticks);
+        Text.send(player, plugin.settings().messagePrefix(), "Builder speed updated to &e" + ticks + "&r ticks per step.");
     }
 
     private Optional<UUID> getBoundBuilderId(Player player) {
@@ -103,7 +125,17 @@ public final class CalickroBuilderCommand implements CommandExecutor, TabComplet
             completions.add("provider");
             completions.add("status");
             completions.add("testhouse");
+            completions.add("scan");
+            completions.add("speed");
             completions.add("reload");
+        }
+
+        if (args.length == 3 && args[0].equalsIgnoreCase("builder") && args[1].equalsIgnoreCase("speed")) {
+            completions.add("2");
+            completions.add("4");
+            completions.add("8");
+            completions.add("12");
+            completions.add("20");
         }
 
         return completions;

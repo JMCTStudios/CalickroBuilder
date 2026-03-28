@@ -26,6 +26,9 @@ public final class BuilderSettings {
     private int siteLateralStep;
     private int siteMaxSideOffset;
     private int preserveWorldSpawnRadius;
+    private int siteMinHouseGap;
+    private int siteRoadPreferenceDistance;
+    private int siteRoadClearance;
     private List<Material> siteAvoidGroundMaterials;
     private List<String> worldGuardAllowedBuildRegions;
     private List<String> worldGuardPreserveRegions;
@@ -46,17 +49,20 @@ public final class BuilderSettings {
         this.maxAutoRelocateDistance = config.getInt("validation.max-auto-relocate-distance", 16);
         this.blocksPerTick = config.getInt("build.blocks-per-tick", 25);
         this.blocksPerStep = config.getInt("build.blocks-per-step", 1);
-        this.buildIntervalTicks = config.getLong("build.interval-ticks", 8L);
+        this.buildIntervalTicks = Math.max(1L, config.getLong("build.interval-ticks", 8L));
         this.defaultPathMaterial = Material.matchMaterial(config.getString("build.default-path-material", "DIRT_PATH"));
         if (this.defaultPathMaterial == null) {
             this.defaultPathMaterial = Material.DIRT_PATH;
         }
         this.messagePrefix = config.getString("messages.prefix", "&6[CalickroBuilder]&r ");
-        this.siteSearchMinDistance = config.getInt("site-planner.search-min-distance", 10);
-        this.siteSearchMaxDistance = config.getInt("site-planner.search-max-distance", 28);
+        this.siteSearchMinDistance = config.getInt("site-planner.search-min-distance", 8);
+        this.siteSearchMaxDistance = config.getInt("site-planner.search-max-distance", 36);
         this.siteLateralStep = config.getInt("site-planner.lateral-step", 2);
-        this.siteMaxSideOffset = config.getInt("site-planner.max-side-offset", 16);
+        this.siteMaxSideOffset = config.getInt("site-planner.max-side-offset", 24);
         this.preserveWorldSpawnRadius = config.getInt("site-planner.preserve-world-spawn-radius", 8);
+        this.siteMinHouseGap = Math.max(1, config.getInt("site-planner.min-house-gap", 2));
+        this.siteRoadPreferenceDistance = Math.max(2, config.getInt("site-planner.road-preference-distance", 12));
+        this.siteRoadClearance = Math.max(0, config.getInt("site-planner.road-clearance", 1));
         this.siteAvoidGroundMaterials = new ArrayList<>();
         for (String name : config.getStringList("site-planner.avoid-ground-materials")) {
             Material material = Material.matchMaterial(name);
@@ -100,7 +106,14 @@ public final class BuilderSettings {
     public int siteLateralStep() { return siteLateralStep; }
     public int siteMaxSideOffset() { return siteMaxSideOffset; }
     public int preserveWorldSpawnRadius() { return preserveWorldSpawnRadius; }
+    public int siteMinHouseGap() { return siteMinHouseGap; }
+    public int siteRoadPreferenceDistance() { return siteRoadPreferenceDistance; }
+    public int siteRoadClearance() { return siteRoadClearance; }
     public List<Material> siteAvoidGroundMaterials() { return List.copyOf(siteAvoidGroundMaterials); }
     public List<String> worldGuardAllowedBuildRegions() { return List.copyOf(worldGuardAllowedBuildRegions); }
     public List<String> worldGuardPreserveRegions() { return List.copyOf(worldGuardPreserveRegions); }
+
+    public void setBuildIntervalTicks(long buildIntervalTicks) {
+        this.buildIntervalTicks = Math.max(1L, buildIntervalTicks);
+    }
 }
