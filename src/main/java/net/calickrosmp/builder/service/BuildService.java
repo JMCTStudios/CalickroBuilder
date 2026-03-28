@@ -23,6 +23,8 @@ import net.calickrosmp.builder.text.Text;
 import net.calickrosmp.builder.validation.BuildValidator;
 import net.calickrosmp.builder.validation.ValidationIssue;
 import net.calickrosmp.builder.validation.ValidationResult;
+import net.citizensnpcs.api.CitizensAPI;
+import net.citizensnpcs.api.npc.NPC;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 
@@ -108,7 +110,7 @@ public final class BuildService {
         Orientation preferredOrientation = orientationFor(player.getLocation());
         HouseSpec initialSpec = HouseSpec.starter(preferredOrientation);
 
-        Location plannerOrigin = player.getLocation();
+        Location plannerOrigin = resolvePlannerOrigin(player, profile);
         SiteSelection siteSelection = buildSitePlanner.selectStarterHouseSite(player, plannerOrigin, preferredOrientation, initialSpec);
         if (!siteSelection.found() || siteSelection.anchor() == null || siteSelection.orientation() == null) {
             Text.send(
@@ -157,6 +159,31 @@ public final class BuildService {
                 plugin.settings().messagePrefix(),
                 plugin.getConfig().getString("messages.build-queued") + " &7(" + plan.summary() + ")"
         );
+    }
+
+    private Location resolvePlannerOrigin(Player player, BuilderProfile profile) {
+        if (CitizensAPI.hasImplementation()) {
+            long least = profile.identity().npcId().getLeastSignificantBits();
+            NPC npc = CitizensAPI.getNPCRegistry().getById((int) least);
+            if (npc != null && npc.isSpawned() && npc.getEntity() != null) {
+                Location npcLocation = npc.getEntity().getLocation().clone();
+                Location snapped = snapToGround(npcLocation);
+                return snapped != null ? snapped : npcLocation;
+            }
+        }
+        Location fallback = player.getLocation().clone();
+        Location snapped = snapToGround(fallback);
+        return snapped != null ? snapped : fallback;
+    }
+
+    private Location snapToGround(Location location) {
+        if (location == null || location.getWorld() == null) {
+            return location;
+        }
+        int x = location.getBlockX();
+        int z = location.getBlockZ();
+        int topY = location.getWorld().getHighestBlockYAt(x, z);
+        return new Location(location.getWorld(), x + 0.5, topY + 1.0, z + 0.5, location.getYaw(), location.getPitch());
     }
 
     public void reportStatus(Player player, UUID builderId) {

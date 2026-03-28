@@ -30,29 +30,28 @@ public final class BuildSitePlanner {
         }
 
         List<Orientation> orientations = orderedOrientations(origin, preferredOrientation);
-        SiteSelection fallback = null;
+        List<Location> searchOrigins = searchOrigins(origin);
+        SiteSelection bestCandidate = null;
 
-        for (Orientation orientation : orientations) {
-            SiteSelection candidate = selectStarterHouseAnchor(requester, origin, orientation, spec);
-            if (!candidate.found()) {
-                if (fallback == null) {
-                    fallback = candidate;
+        for (Location searchOrigin : searchOrigins) {
+            for (Orientation orientation : orientations) {
+                SiteSelection candidate = selectStarterHouseAnchor(requester, searchOrigin, orientation, spec);
+                if (!candidate.found()) {
+                    continue;
                 }
-                continue;
-            }
 
-            int score = scoreOrientation(requester, candidate.anchor(), orientation, spec);
-            candidate = candidate.withScore(score);
-            if (score >= 1000) {
-                return candidate;
-            }
-            if (fallback == null || !fallback.found() || candidate.score() > fallback.score()) {
-                fallback = candidate;
+                int score = scoreOrientation(requester, candidate.anchor(), orientation, spec)
+                        - (int) Math.round(candidate.anchor().distanceSquared(origin));
+                candidate = candidate.withScore(score);
+
+                if (bestCandidate == null || candidate.score() > bestCandidate.score()) {
+                    bestCandidate = candidate;
+                }
             }
         }
 
-        if (fallback != null) {
-            return fallback;
+        if (bestCandidate != null) {
+            return bestCandidate;
         }
         return SiteSelection.failure("I couldn't find a safe build spot nearby. Move me away from roads or reduce preserve restrictions.");
     }
@@ -85,6 +84,40 @@ public final class BuildSitePlanner {
         }
 
         return SiteSelection.failure("I couldn't find a safe build spot nearby. Move me away from roads or reduce preserve restrictions.");
+    }
+
+    private List<Location> searchOrigins(Location origin) {
+        List<Location> origins = new ArrayList<>();
+        origins.add(normalizeOrigin(origin));
+
+        int maxRelocate = Math.max(6, plugin.settings().maxAutoRelocateDistance());
+        int step = Math.max(4, plugin.settings().siteLateralStep() * 2);
+        int[] distances = new int[]{step, step * 2, Math.max(step * 3, maxRelocate)};
+
+        for (int distance : distances) {
+            if (distance <= 0 || distance > maxRelocate + step) {
+                continue;
+            }
+            origins.add(normalizeOrigin(origin.clone().add(distance, 0, 0)));
+            origins.add(normalizeOrigin(origin.clone().add(-distance, 0, 0)));
+            origins.add(normalizeOrigin(origin.clone().add(0, 0, distance)));
+            origins.add(normalizeOrigin(origin.clone().add(0, 0, -distance)));
+            origins.add(normalizeOrigin(origin.clone().add(distance, 0, distance)));
+            origins.add(normalizeOrigin(origin.clone().add(-distance, 0, distance)));
+            origins.add(normalizeOrigin(origin.clone().add(distance, 0, -distance)));
+            origins.add(normalizeOrigin(origin.clone().add(-distance, 0, -distance)));
+        }
+        return origins;
+    }
+
+    private Location normalizeOrigin(Location location) {
+        if (location == null || location.getWorld() == null) {
+            return location;
+        }
+        int x = location.getBlockX();
+        int z = location.getBlockZ();
+        int topY = location.getWorld().getHighestBlockYAt(x, z);
+        return new Location(location.getWorld(), x + 0.5, topY + 1.0, z + 0.5, location.getYaw(), location.getPitch());
     }
 
     private List<Orientation> orderedOrientations(Location origin, Orientation preferredOrientation) {
@@ -196,6 +229,7 @@ public final class BuildSitePlanner {
 
         for (int localX = -padding; localX < width + padding; localX++) {
             for (int localZ = -padding; localZ < depth + padding; localZ++) {
+                boolean inFootprint = localX >= 0 && localX < width && localZ >= 0 && localZ < depth;
                 Location sample = rotate(anchor, orientation, localX, 0, localZ);
                 Block floor = sample.getBlock();
                 Block below = sample.clone().add(0, -1, 0).getBlock();
@@ -210,7 +244,7 @@ public final class BuildSitePlanner {
                     }
                 }
 
-                if (avoid.contains(floor.getType()) || avoid.contains(below.getType())) {
+                if (inFootprint && (avoid.contains(floor.getType()) || avoid.contains(below.getType()))) {
                     return SiteCheckResult.blocked("That spot would build on a road or protected path.");
                 }
 
@@ -222,10 +256,10 @@ public final class BuildSitePlanner {
                     return SiteCheckResult.blocked("That spot doesn't have solid ground under it.");
                 }
 
-                if (!(head.isPassable() || head.getType().isAir())) {
+                if (inFootprint && !(head.isPassable() || head.getType().isAir())) {
                     return SiteCheckResult.blocked("That spot is blocked above ground.");
                 }
-                if (!(aboveHead.isPassable() || aboveHead.getType().isAir())) {
+                if (inFootprint && !(aboveHead.isPassable() || aboveHead.getType().isAir())) {
                     return SiteCheckResult.blocked("That spot doesn't have enough headroom.");
                 }
             }
