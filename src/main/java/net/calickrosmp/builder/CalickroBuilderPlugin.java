@@ -40,14 +40,7 @@ public final class CalickroBuilderPlugin extends JavaPlugin {
         this.builderNpcRegistry = new BuilderNpcRegistry();
         this.buildJobManager = new BuildJobManager(this);
         this.buildValidator = new BuildValidator(this, worldGuardHook, griefPreventionHook);
-        this.buildService = new BuildService(
-                this,
-                builderNpcRegistry,
-                npcProviderRegistry,
-                buildJobManager,
-                buildValidator,
-                bridgeHook
-        );
+        this.buildService = new BuildService(this, builderNpcRegistry, npcProviderRegistry, buildJobManager, buildValidator, bridgeHook);
 
         CalickroBuilderCommand commandHandler =
                 new CalickroBuilderCommand(this, buildService, builderNpcRegistry, npcProviderRegistry);

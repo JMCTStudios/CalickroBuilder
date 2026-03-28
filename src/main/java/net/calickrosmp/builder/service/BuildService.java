@@ -105,13 +105,12 @@ public final class BuildService {
         }
 
         BuilderProfile profile = profileOptional.get();
-        Orientation orientation = orientationFor(player.getLocation());
-        HouseSpec houseSpec = HouseSpec.starter(orientation);
+        Orientation preferredOrientation = orientationFor(player.getLocation());
+        HouseSpec initialSpec = HouseSpec.starter(preferredOrientation);
 
         Location plannerOrigin = player.getLocation();
-
-        SiteSelection siteSelection = buildSitePlanner.selectStarterHouseAnchor(player, plannerOrigin, orientation, houseSpec);
-        if (!siteSelection.found() || siteSelection.anchor() == null) {
+        SiteSelection siteSelection = buildSitePlanner.selectStarterHouseSite(player, plannerOrigin, preferredOrientation, initialSpec);
+        if (!siteSelection.found() || siteSelection.anchor() == null || siteSelection.orientation() == null) {
             Text.send(
                     player,
                     plugin.settings().messagePrefix(),
@@ -122,6 +121,7 @@ public final class BuildService {
             return;
         }
 
+        HouseSpec houseSpec = HouseSpec.starter(siteSelection.orientation());
         BuildPlan plan = new BuildPlan(
                 StructureType.HOUSE,
                 "Starter 1-floor house facing the player",

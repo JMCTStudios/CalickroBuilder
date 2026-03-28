@@ -10,6 +10,7 @@ import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -21,6 +22,39 @@ public final class BuildSitePlanner {
     public BuildSitePlanner(CalickroBuilderPlugin plugin, WorldGuardHook worldGuardHook) {
         this.plugin = plugin;
         this.worldGuardHook = worldGuardHook;
+    }
+
+    public SiteSelection selectStarterHouseSite(Player requester, Location origin, Orientation preferredOrientation, HouseSpec spec) {
+        if (origin == null || origin.getWorld() == null) {
+            return SiteSelection.failure("I don't know where to start building from yet.");
+        }
+
+        List<Orientation> orientations = orderedOrientations(origin, preferredOrientation);
+        SiteSelection fallback = null;
+
+        for (Orientation orientation : orientations) {
+            SiteSelection candidate = selectStarterHouseAnchor(requester, origin, orientation, spec);
+            if (!candidate.found()) {
+                if (fallback == null) {
+                    fallback = candidate;
+                }
+                continue;
+            }
+
+            int score = scoreOrientation(requester, candidate.anchor(), orientation, spec);
+            candidate = candidate.withScore(score);
+            if (score >= 1000) {
+                return candidate;
+            }
+            if (fallback == null || !fallback.found() || candidate.score() > fallback.score()) {
+                fallback = candidate;
+            }
+        }
+
+        if (fallback != null) {
+            return fallback;
+        }
+        return SiteSelection.failure("I couldn't find a safe build spot nearby. Move me away from roads or reduce preserve restrictions.");
     }
 
     public SiteSelection selectStarterHouseAnchor(Player requester, Location npcLocation, Orientation orientation, HouseSpec spec) {
@@ -44,13 +78,97 @@ public final class BuildSitePlanner {
                     Location candidate = anchorFromOffsets(npcLocation, orientation, doorX, forward, sideOffset);
                     SiteCheckResult check = isValidAnchor(requester, world, candidate, orientation, width, depth);
                     if (check.allowed()) {
-                        return SiteSelection.success(candidate, check.reason());
+                        return SiteSelection.success(candidate, orientation, check.reason());
                     }
                 }
             }
         }
 
         return SiteSelection.failure("I couldn't find a safe build spot nearby. Move me away from roads or reduce preserve restrictions.");
+    }
+
+    private List<Orientation> orderedOrientations(Location origin, Orientation preferredOrientation) {
+        List<Orientation> order = new ArrayList<>();
+        order.add(preferredOrientation);
+
+        Orientation awayFromSpawn = orientationAwayFromSpawn(origin);
+        if (!order.contains(awayFromSpawn)) {
+            order.add(awayFromSpawn);
+        }
+
+        for (Orientation orientation : Orientation.values()) {
+            if (!order.contains(orientation)) {
+                order.add(orientation);
+            }
+        }
+        return order;
+    }
+
+    private Orientation orientationAwayFromSpawn(Location origin) {
+        Location spawn = origin.getWorld().getSpawnLocation();
+        double dx = origin.getX() - spawn.getX();
+        double dz = origin.getZ() - spawn.getZ();
+
+        if (Math.abs(dx) >= Math.abs(dz)) {
+            return dx >= 0 ? Orientation.EAST : Orientation.WEST;
+        }
+        return dz >= 0 ? Orientation.SOUTH : Orientation.NORTH;
+    }
+
+    private int scoreOrientation(Player requester, Location anchor, Orientation orientation, HouseSpec spec) {
+        int score = 0;
+        List<Material> avoid = plugin.settings().siteAvoidGroundMaterials();
+        Location spawn = anchor.getWorld().getSpawnLocation();
+        Location frontDoorOutside = frontOutside(anchor, orientation, spec.width());
+
+        for (int i = 1; i <= 6; i++) {
+            Location probe = frontDoorOutside.clone();
+            switch (orientation) {
+                case SOUTH -> probe.add(0, 0, -i);
+                case NORTH -> probe.add(0, 0, i);
+                case EAST -> probe.add(-i, 0, 0);
+                case WEST -> probe.add(i, 0, 0);
+            }
+            Material below = probe.clone().add(0, -1, 0).getBlock().getType();
+            Material at = probe.getBlock().getType();
+            if (avoid.contains(at) || avoid.contains(below)) {
+                score += 1000 - (i * 80);
+                break;
+            }
+        }
+
+        double dx = frontDoorOutside.getX() - spawn.getX();
+        double dz = frontDoorOutside.getZ() - spawn.getZ();
+        double distSq = (dx * dx) + (dz * dz);
+        score += Math.min(250, (int) distSq / 4);
+
+        if (!worldGuardHook.canBypassPreserve(requester) && wouldFaceTowardSpawn(anchor, orientation, spawn)) {
+            score -= 600;
+        }
+
+        return score;
+    }
+
+    private boolean wouldFaceTowardSpawn(Location anchor, Orientation orientation, Location spawn) {
+        Location front = frontOutside(anchor, orientation, 15);
+        double frontDist = front.distanceSquared(spawn);
+        double backDist = switch (orientation) {
+            case SOUTH -> front.clone().add(0, 0, 4).distanceSquared(spawn);
+            case NORTH -> front.clone().add(0, 0, -4).distanceSquared(spawn);
+            case EAST -> front.clone().add(4, 0, 0).distanceSquared(spawn);
+            case WEST -> front.clone().add(-4, 0, 0).distanceSquared(spawn);
+        };
+        return frontDist < backDist;
+    }
+
+    private Location frontOutside(Location anchor, Orientation orientation, int width) {
+        int doorX = width / 2;
+        return switch (orientation) {
+            case SOUTH -> anchor.clone().add(doorX, 0, -1);
+            case NORTH -> anchor.clone().add(-doorX, 0, 1);
+            case EAST -> anchor.clone().add(-1, 0, -doorX);
+            case WEST -> anchor.clone().add(1, 0, doorX);
+        };
     }
 
     private Location anchorFromOffsets(Location npcLocation, Orientation orientation, int doorX, int forward, int sideOffset) {
@@ -137,13 +255,17 @@ public final class BuildSitePlanner {
         };
     }
 
-    public record SiteSelection(boolean found, Location anchor, String message) {
-        public static SiteSelection success(Location anchor, String message) {
-            return new SiteSelection(true, anchor, message);
+    public record SiteSelection(boolean found, Location anchor, Orientation orientation, String message, int score) {
+        public static SiteSelection success(Location anchor, Orientation orientation, String message) {
+            return new SiteSelection(true, anchor, orientation, message, 0);
         }
 
         public static SiteSelection failure(String message) {
-            return new SiteSelection(false, null, message);
+            return new SiteSelection(false, null, null, message, Integer.MIN_VALUE);
+        }
+
+        public SiteSelection withScore(int newScore) {
+            return new SiteSelection(found, anchor, orientation, message, newScore);
         }
     }
 
