@@ -8,6 +8,7 @@ import net.calickrosmp.builder.hook.WorldGuardHook;
 import net.calickrosmp.builder.job.BuildJobManager;
 import net.calickrosmp.builder.listener.BuilderChatListener;
 import net.calickrosmp.builder.npc.BuilderNpcRegistry;
+import net.calickrosmp.builder.persist.BuilderPersistenceManager;
 import net.calickrosmp.builder.provider.NpcProviderRegistry;
 import net.calickrosmp.builder.service.BuildService;
 import net.calickrosmp.builder.validation.BuildValidator;
@@ -21,6 +22,7 @@ public final class CalickroBuilderPlugin extends JavaPlugin {
     private BuilderSettings settings;
     private NpcProviderRegistry npcProviderRegistry;
     private BuilderNpcRegistry builderNpcRegistry;
+    private BuilderPersistenceManager builderPersistenceManager;
     private BuildJobManager buildJobManager;
     private BuildValidator buildValidator;
     private BuildService buildService;
@@ -38,6 +40,8 @@ public final class CalickroBuilderPlugin extends JavaPlugin {
         this.bridgeHook = new CalickroNpcBridgeHook(this);
         this.npcProviderRegistry = new NpcProviderRegistry(this);
         this.builderNpcRegistry = new BuilderNpcRegistry();
+        this.builderPersistenceManager = new BuilderPersistenceManager(this, builderNpcRegistry);
+        this.builderPersistenceManager.loadBuilders();
         this.buildJobManager = new BuildJobManager(this);
         this.buildValidator = new BuildValidator(this, worldGuardHook, griefPreventionHook);
         this.buildService = new BuildService(this, builderNpcRegistry, npcProviderRegistry, buildJobManager, buildValidator, bridgeHook);
@@ -52,10 +56,14 @@ public final class CalickroBuilderPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new BuilderChatListener(this, buildService), this);
 
         getLogger().info("CalickroBuilder enabled. Provider=" + npcProviderRegistry.getActiveProviderName());
+        getLogger().info("Loaded persisted builders: " + builderNpcRegistry.all().size());
     }
 
     @Override
     public void onDisable() {
+        if (builderPersistenceManager != null) {
+            builderPersistenceManager.saveBuilders();
+        }
         if (buildJobManager != null) {
             buildJobManager.shutdown();
         }
@@ -65,6 +73,12 @@ public final class CalickroBuilderPlugin extends JavaPlugin {
     public void reloadPlugin() {
         reloadConfig();
         this.settings.reload();
+        if (this.worldGuardHook != null) {
+            this.worldGuardHook.refresh();
+        }
+        if (this.builderPersistenceManager != null) {
+            this.builderPersistenceManager.saveBuilders();
+        }
     }
 
     public BuilderSettings settings() {
@@ -81,6 +95,10 @@ public final class CalickroBuilderPlugin extends JavaPlugin {
 
     public CalickroNpcBridgeHook bridgeHook() {
         return bridgeHook;
+    }
+
+    public BuilderPersistenceManager builderPersistenceManager() {
+        return builderPersistenceManager;
     }
 
     public Logger log() {

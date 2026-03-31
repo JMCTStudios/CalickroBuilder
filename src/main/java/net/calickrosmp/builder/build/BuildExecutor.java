@@ -7,7 +7,6 @@ import net.calickrosmp.builder.job.BuildJobManager;
 import net.calickrosmp.builder.npc.BuilderProfile;
 import net.calickrosmp.builder.npc.BuilderState;
 import net.calickrosmp.builder.plan.BuildPlan;
-import net.calickrosmp.builder.plan.Orientation;
 import net.citizensnpcs.api.CitizensAPI;
 import net.citizensnpcs.api.npc.NPC;
 import org.bukkit.Location;
@@ -21,6 +20,8 @@ import org.bukkit.scheduler.BukkitRunnable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 public final class BuildExecutor {
     private final CalickroBuilderPlugin plugin;
@@ -35,7 +36,7 @@ public final class BuildExecutor {
 
     public void executeStarterHouse(Player requester, BuilderProfile profile, BuildPlan plan, BuildJob job) {
         NPC builderNpc = findNpc(profile);
-        if (builderNpc == null || !builderNpc.isSpawned()) {
+        if (builderNpc == null || !builderNpc.isSpawned() || builderNpc.getEntity() == null) {
             profile.setState(BuilderState.ERROR);
             buildJobManager.failCurrent(profile.identity().npcId());
             bridgeHook.pushState(profile.identity(), BuilderState.ERROR, "Builder NPC is not spawned");
@@ -54,23 +55,27 @@ public final class BuildExecutor {
         BuildBounds bounds = BuildBounds.fromTasks(tasks);
         Location relocationSpot = safeRelocationSpot(plan, bounds);
         List<RelocatedNpc> movedNpcs = relocateAffectedNpcs(builderNpc, bounds, relocationSpot);
-        Location workSpot = workSpot(plan);
+        List<Location> workSpots = workSpots(plan, bounds);
 
         profile.setState(BuilderState.MOVING);
+        profile.markBuildStarted();
         bridgeHook.pushState(profile.identity(), BuilderState.MOVING, "Walking to build site");
         buildJobManager.startCurrent(profile.identity().npcId());
 
-        navigateBuilderToSite(
+        tryNavigateToAnyWorkSpot(
+                profile.identity().npcId(),
                 builderNpc,
-                workSpot,
+                workSpots,
+                0,
                 () -> {
                     profile.setState(BuilderState.BUILDING);
                     bridgeHook.pushState(profile.identity(), BuilderState.BUILDING, plan.summary());
-                    beginPlacement(requester, profile, builderNpc, movedNpcs, tasks, plan, bounds, job);
+                    schedulePlacementStep(requester, profile, builderNpc, movedNpcs, tasks, plan, job, 0, workSpots.get(0));
                 },
                 () -> {
                     restoreNpcs(movedNpcs);
                     buildJobManager.failCurrent(profile.identity().npcId());
+                    profile.clearBuildStarted();
                     profile.setState(BuilderState.ERROR);
                     bridgeHook.pushState(profile.identity(), BuilderState.ERROR, "Could not reach build site");
                     requester.sendMessage("§c" + profile.identity().displayName() + " could not walk to the build site.");
@@ -78,19 +83,88 @@ public final class BuildExecutor {
         );
     }
 
-    private void navigateBuilderToSite(NPC builderNpc, Location workSpot, Runnable onArrive, Runnable onFail) {
+    private void schedulePlacementStep(Player requester,
+                                       BuilderProfile profile,
+                                       NPC builderNpc,
+                                       List<RelocatedNpc> movedNpcs,
+                                       List<BuildTask> tasks,
+                                       BuildPlan plan,
+                                       BuildJob job,
+                                       int startIndex,
+                                       Location finalWorkSpot) {
+        if (!builderNpc.isSpawned() || builderNpc.getEntity() == null) {
+            cleanup(requester, profile, builderNpc, movedNpcs, plan, false, null);
+            return;
+        }
+
+        int index = startIndex;
+        int perStep = Math.max(1, plugin.settings().blocksPerStep());
+        for (int i = 0; i < perStep && index < tasks.size(); i++) {
+            BuildTask task = tasks.get(index++);
+            if (task.location().getWorld() == null) {
+                continue;
+            }
+            builderNpc.faceLocation(task.location());
+            Entity entity = builderNpc.getEntity();
+            if (entity instanceof LivingEntity living) {
+                living.swingMainHand();
+            }
+            if (task.blockData() != null) {
+                task.location().getBlock().setBlockData(task.blockData(), false);
+            } else {
+                task.location().getBlock().setType(task.material(), false);
+            }
+        }
+
+        if (index >= tasks.size()) {
+            cleanup(requester, profile, builderNpc, movedNpcs, plan, true, finalWorkSpot);
+            return;
+        }
+
+        final int nextIndex = index;
+        long delay = profile.effectiveDelayTicks(plugin.settings(), tasks.size(), nextIndex);
+        plugin.getServer().getScheduler().runTaskLater(plugin, () ->
+                schedulePlacementStep(requester, profile, builderNpc, movedNpcs, tasks, plan, job, nextIndex, finalWorkSpot), delay);
+    }
+
+    private void tryNavigateToAnyWorkSpot(UUID builderId,
+                                         NPC builderNpc,
+                                         List<Location> workSpots,
+                                         int index,
+                                         Runnable onArrive,
+                                         Runnable onFail) {
+        if (index >= workSpots.size()) {
+            onFail.run();
+            return;
+        }
+
+        Location target = workSpots.get(index);
+        navigateBuilderToSite(builderId, builderNpc, target, onArrive, () ->
+                tryNavigateToAnyWorkSpot(builderId, builderNpc, workSpots, index + 1, onArrive, onFail));
+    }
+
+    private void navigateBuilderToSite(UUID builderId, NPC builderNpc, Location workSpot, Runnable onArrive, Runnable onFail) {
         Entity entity = builderNpc.getEntity();
         if (entity == null) {
             onFail.run();
             return;
         }
 
-        Location centeredTarget = workSpot.clone().add(0.0, 0.0, 0.0);
         Location start = entity.getLocation().clone();
-        double startDistanceSquared = start.distanceSquared(centeredTarget);
+        Location centeredTarget = workSpot.clone();
+        centeredTarget.setYaw(start.getYaw());
+        centeredTarget.setPitch(start.getPitch());
 
-        builderNpc.faceLocation(centeredTarget);
+        double startDistanceSquared = start.distanceSquared(centeredTarget);
+        if (startDistanceSquared <= 2.25) {
+            onArrive.run();
+            return;
+        }
+
         builderNpc.getNavigator().setTarget(centeredTarget);
+        if (builderNpc.getNavigator().isNavigating()) {
+            builderNpc.faceLocation(centeredTarget);
+        }
 
         new BukkitRunnable() {
             int checks;
@@ -98,33 +172,38 @@ public final class BuildExecutor {
 
             @Override
             public void run() {
+                if (buildJobManager.isCancelRequested(builderId)) {
+                    builderNpc.getNavigator().cancelNavigation();
+                    cancel();
+                    onFail.run();
+                    return;
+                }
+
                 checks++;
+
                 Entity currentEntity = builderNpc.getEntity();
-                if (currentEntity == null) {
-                    if (checks > 40) {
-                        cancel();
-                        onFail.run();
-                    }
+                if (currentEntity == null || !builderNpc.isSpawned()) {
+                    cancel();
+                    onFail.run();
                     return;
                 }
 
                 Location current = currentEntity.getLocation();
-                double currentDistanceSquared = current.distanceSquared(centeredTarget);
                 if (current.distanceSquared(start) >= 1.0) {
                     moved = true;
                 }
 
-                if (currentDistanceSquared <= 2.25) {
+                if (current.distanceSquared(centeredTarget) <= 2.25) {
                     builderNpc.getNavigator().cancelNavigation();
                     cancel();
                     onArrive.run();
                     return;
                 }
 
-                if (checks >= 100) {
+                if (checks >= 80) {
                     builderNpc.getNavigator().cancelNavigation();
                     cancel();
-                    if (startDistanceSquared <= 2.25 || moved) {
+                    if (moved && current.distanceSquared(centeredTarget) <= 16.0) {
                         onArrive.run();
                     } else {
                         onFail.run();
@@ -134,70 +213,58 @@ public final class BuildExecutor {
         }.runTaskTimer(plugin, 0L, 5L);
     }
 
-    private void beginPlacement(Player requester,
-                                BuilderProfile profile,
-                                NPC builderNpc,
-                                List<RelocatedNpc> movedNpcs,
-                                List<BuildTask> tasks,
-                                BuildPlan plan,
-                                BuildBounds bounds,
-                                BuildJob job) {
-        new BukkitRunnable() {
-            int index;
-
-            @Override
-            public void run() {
-                if (!builderNpc.isSpawned() || builderNpc.getEntity() == null) {
-                    cleanup(false);
-                    cancel();
-                    return;
-                }
-
-                int perStep = Math.max(1, plugin.settings().blocksPerStep());
-                for (int i = 0; i < perStep && index < tasks.size(); i++) {
-                    BuildTask task = tasks.get(index++);
-                    if (task.location().getWorld() == null) {
-                        continue;
-                    }
-                    builderNpc.faceLocation(task.location());
-                    Entity entity = builderNpc.getEntity();
-                    if (entity instanceof LivingEntity living) {
-                        living.swingMainHand();
-                    }
-                    task.location().getBlock().setType(task.material(), false);
-                }
-
-                if (index >= tasks.size()) {
-                    cleanup(true);
-                    cancel();
-                }
+    private void cleanup(Player requester,
+                         BuilderProfile profile,
+                         NPC builderNpc,
+                         List<RelocatedNpc> movedNpcs,
+                         BuildPlan plan,
+                         boolean success,
+                         Location finalWorkSpot) {
+        restoreNpcs(movedNpcs);
+        if (success) {
+            buildJobManager.completeCurrent(profile.identity().npcId());
+            profile.setState(BuilderState.COMPLETE);
+            bridgeHook.pushState(profile.identity(), BuilderState.COMPLETE, "Starter house built");
+            requester.sendMessage("§a" + profile.identity().displayName() + " finished building the starter house.");
+            long started = profile.clearBuildStarted();
+            if (started > 0L) {
+                requester.sendMessage("§6[" + profile.identity().displayName() + "] §ePhew... that took me " + formatElapsed(System.currentTimeMillis() - started) + ".");
             }
+        } else {
+            buildJobManager.failCurrent(profile.identity().npcId());
+            profile.clearBuildStarted();
+            profile.setState(BuilderState.ERROR);
+            bridgeHook.pushState(profile.identity(), BuilderState.ERROR, "Build cancelled");
+            requester.sendMessage("§cThe build stopped before it completed.");
+        }
 
-            private void cleanup(boolean success) {
-                restoreNpcs(movedNpcs);
-                if (success) {
-                    buildJobManager.completeCurrent(profile.identity().npcId());
-                    profile.setState(BuilderState.COMPLETE);
-                    bridgeHook.pushState(profile.identity(), BuilderState.COMPLETE, "Starter house built");
-                    requester.sendMessage("§a" + profile.identity().displayName() + " finished building the starter house.");
-                } else {
-                    buildJobManager.failCurrent(profile.identity().npcId());
-                    profile.setState(BuilderState.ERROR);
-                    bridgeHook.pushState(profile.identity(), BuilderState.ERROR, "Build cancelled");
-                    requester.sendMessage("§cThe build stopped before it completed.");
-                }
+        if (builderNpc != null && builderNpc.isSpawned()) {
+            builderNpc.teleport(finalWorkSpot == null ? workSpots(plan, BuildBounds.fromTasks(BuildPatternFactory.createStarterHouse(plan))).get(0) : finalWorkSpot, PlayerTeleportEvent.TeleportCause.PLUGIN);
+        }
 
-                builderNpc.teleport(workSpot(plan), PlayerTeleportEvent.TeleportCause.PLUGIN);
+        plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+            profile.setState(BuilderState.IDLE);
+            bridgeHook.pushState(profile.identity(), BuilderState.IDLE, "Ready");
+        }, 40L);
+    }
 
-                new BukkitRunnable() {
-                    @Override
-                    public void run() {
-                        profile.setState(BuilderState.IDLE);
-                        bridgeHook.pushState(profile.identity(), BuilderState.IDLE, "Ready");
-                    }
-                }.runTaskLater(plugin, 40L);
-            }
-        }.runTaskTimer(plugin, 0L, Math.max(2L, plugin.settings().buildIntervalTicks()));
+    private String formatElapsed(long elapsedMillis) {
+        long totalSeconds = Math.max(0L, TimeUnit.MILLISECONDS.toSeconds(elapsedMillis));
+        long hours = totalSeconds / 3600;
+        long minutes = (totalSeconds % 3600) / 60;
+        long seconds = totalSeconds % 60;
+
+        List<String> parts = new ArrayList<>();
+        if (hours > 0) {
+            parts.add(hours + (hours == 1 ? " hour" : " hours"));
+        }
+        if (minutes > 0) {
+            parts.add(minutes + (minutes == 1 ? " minute" : " minutes"));
+        }
+        if (seconds > 0 || parts.isEmpty()) {
+            parts.add(seconds + (seconds == 1 ? " second" : " seconds"));
+        }
+        return String.join(", ", parts);
     }
 
     private List<RelocatedNpc> relocateAffectedNpcs(NPC builderNpc, BuildBounds bounds, Location relocationSpot) {
@@ -237,20 +304,33 @@ public final class BuildExecutor {
         if (!CitizensAPI.hasImplementation()) {
             return null;
         }
-        long least = profile.identity().npcId().getLeastSignificantBits();
-        int npcId = (int) least;
+        int npcId = (int) profile.identity().npcId().getLeastSignificantBits();
+        if (npcId <= 0) {
+            return null;
+        }
         return CitizensAPI.getNPCRegistry().getById(npcId);
     }
 
-    private Location workSpot(BuildPlan plan) {
+    private List<Location> workSpots(BuildPlan plan, BuildBounds bounds) {
         Location base = plan.anchor().clone();
-        int doorX = Math.max(7, plan.houseSpec().width()) / 2;
-        return switch (plan.houseSpec().orientation()) {
-            case SOUTH -> base.clone().add(doorX + 0.5, 0, -2.0);
-            case NORTH -> base.clone().add(-doorX - 0.5, 0, 2.0);
-            case EAST -> base.clone().add(-2.0, 0, -doorX - 0.5);
-            case WEST -> base.clone().add(2.0, 0, doorX + 0.5);
-        };
+        int halfWidth = Math.max(2, plan.houseSpec().width() / 2);
+        int halfDepth = Math.max(2, plan.houseSpec().depth() / 2);
+        List<Location> spots = new ArrayList<>();
+
+        spots.add(switch (plan.houseSpec().orientation()) {
+            case SOUTH -> base.clone().add(halfWidth + 0.5, 0, -2.0);
+            case NORTH -> base.clone().add(halfWidth + 0.5, 0, plan.houseSpec().depth() + 1.5);
+            case EAST -> base.clone().add(-2.0, 0, halfDepth + 0.5);
+            case WEST -> base.clone().add(plan.houseSpec().width() + 1.5, 0, halfDepth + 0.5);
+        });
+
+        spots.add(base.clone().add(halfWidth + 0.5, 0, plan.houseSpec().depth() + 1.5));
+        spots.add(base.clone().add(halfWidth + 0.5, 0, -2.0));
+        spots.add(base.clone().add(-2.0, 0, halfDepth + 0.5));
+        spots.add(base.clone().add(plan.houseSpec().width() + 1.5, 0, halfDepth + 0.5));
+        spots.add(base.clone().add(-3.5, 0, -3.5));
+        spots.add(base.clone().add(bounds.width() + 2.5, 0, bounds.depth() + 2.5));
+        return spots;
     }
 
     private Location safeRelocationSpot(BuildPlan plan, BuildBounds bounds) {
@@ -308,12 +388,7 @@ public final class BuildExecutor {
                     && location.getBlockZ() >= minZ && location.getBlockZ() <= maxZ;
         }
 
-        int width() {
-            return maxX - minX + 1;
-        }
-
-        int depth() {
-            return maxZ - minZ + 1;
-        }
+        int width() { return maxX - minX + 1; }
+        int depth() { return maxZ - minZ + 1; }
     }
 }

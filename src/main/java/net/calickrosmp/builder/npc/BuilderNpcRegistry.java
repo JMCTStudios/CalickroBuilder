@@ -1,5 +1,6 @@
 package net.calickrosmp.builder.npc;
 
+import java.util.Collection;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -14,5 +15,13 @@ public final class BuilderNpcRegistry {
 
     public Optional<BuilderProfile> find(UUID npcId) {
         return Optional.ofNullable(builders.get(npcId));
+    }
+
+    public Collection<BuilderProfile> all() {
+        return builders.values();
+    }
+
+    public void clear() {
+        builders.clear();
     }
 }

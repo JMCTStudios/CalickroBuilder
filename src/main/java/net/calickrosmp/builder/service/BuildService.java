@@ -84,6 +84,10 @@ public final class BuildService {
         BuilderIdentity identity = new BuilderIdentity(selectedId.get(), selectedName.orElse("Builder"), provider.type());
         BuilderProfile profile = builderNpcRegistry.register(identity);
         profile.setState(BuilderState.IDLE);
+        if (profile.speedMode() == null) {
+            profile.setSpeedMode(plugin.settings().defaultSpeedMode());
+        }
+        plugin.builderPersistenceManager().saveBuilders();
 
         Text.send(player, plugin.settings().messagePrefix(), "Builder bound to NPC &e" + identity.displayName() + "&r with provider &b" + provider.name() + "&r.");
     }
@@ -99,10 +103,23 @@ public final class BuildService {
         Orientation preferredOrientation = orientationFor(player.getLocation());
         HouseSpec initialSpec = HouseSpec.starter(preferredOrientation);
 
-        Location plannerOrigin = resolveBuilderLocation(profile).orElse(player.getLocation());
-        SiteSelection siteSelection = buildSitePlanner.selectStarterHouseSite(player, plannerOrigin, preferredOrientation, initialSpec);
-        if (!siteSelection.found() || siteSelection.anchor() == null || siteSelection.orientation() == null) {
-            Text.send(player, plugin.settings().messagePrefix(), "&c" + siteSelection.message());
+        Optional<Location> builderLocation = resolveBuilderLocation(profile);
+        if (builderLocation.isEmpty()) {
+            profile.setState(BuilderState.ERROR);
+            bridgeHook.pushState(profile.identity(), BuilderState.ERROR, "Builder NPC is not spawned");
+            Text.send(player, plugin.settings().messagePrefix(), "&cYour builder NPC must be spawned before it can build.");
+            return;
+        }
+
+        SiteSelection siteSelection = null;
+        for (Location plannerOrigin : plannerOrigins(builderLocation.get(), player.getLocation())) {
+            siteSelection = buildSitePlanner.selectStarterHouseSite(player, plannerOrigin, preferredOrientation, initialSpec);
+            if (siteSelection.found() && siteSelection.anchor() != null && siteSelection.orientation() != null) {
+                break;
+            }
+        }
+        if (siteSelection == null || !siteSelection.found() || siteSelection.anchor() == null || siteSelection.orientation() == null) {
+            Text.send(player, plugin.settings().messagePrefix(), "&c" + (siteSelection == null ? "I couldn't find a safe build spot nearby." : siteSelection.message()));
             profile.setState(BuilderState.ERROR);
             bridgeHook.pushState(profile.identity(), BuilderState.ERROR, "No safe site found");
             return;
@@ -179,19 +196,51 @@ public final class BuildService {
                         + "&r mode=&b" + profile.get().mode()
                         + "&r state=&b" + profile.get().state()
                         + "&r provider=&b" + profile.get().identity().providerType()
+                        + "&r speedMode=&b" + profile.get().speedMode().name().toLowerCase()
+                        + "&r speedOverride=&e" + (profile.get().speedOverrideTicks() == null ? "none" : profile.get().speedOverrideTicks())
                         + "&r job=&7" + jobInfo
         );
     }
 
     private Optional<Location> resolveBuilderLocation(BuilderProfile profile) {
         try {
-            NPC npc = CitizensAPI.getNPCRegistry().getByUniqueIdGlobal(profile.identity().npcId());
+            if (!CitizensAPI.hasImplementation()) {
+                return Optional.empty();
+            }
+            int npcId = (int) profile.identity().npcId().getLeastSignificantBits();
+            if (npcId <= 0) {
+                return Optional.empty();
+            }
+            NPC npc = CitizensAPI.getNPCRegistry().getById(npcId);
             if (npc != null && npc.isSpawned() && npc.getEntity() != null) {
                 return Optional.of(npc.getEntity().getLocation());
             }
         } catch (Throwable ignored) {
         }
         return Optional.empty();
+    }
+
+
+    private java.util.List<Location> plannerOrigins(Location builderLocation, Location playerLocation) {
+        java.util.List<Location> origins = new java.util.ArrayList<>();
+        origins.add(builderLocation.clone());
+
+        int[] ring = new int[]{4, 8, 12};
+        for (int offset : ring) {
+            origins.add(builderLocation.clone().add(offset, 0, 0));
+            origins.add(builderLocation.clone().add(-offset, 0, 0));
+            origins.add(builderLocation.clone().add(0, 0, offset));
+            origins.add(builderLocation.clone().add(0, 0, -offset));
+        }
+
+        if (playerLocation != null) {
+            origins.add(playerLocation.clone());
+            origins.add(playerLocation.clone().add(4, 0, 0));
+            origins.add(playerLocation.clone().add(-4, 0, 0));
+            origins.add(playerLocation.clone().add(0, 0, 4));
+            origins.add(playerLocation.clone().add(0, 0, -4));
+        }
+        return origins;
     }
 
     public Orientation orientationFor(Location location) {

@@ -2,7 +2,6 @@ package net.calickrosmp.builder.hook;
 
 import com.sk89q.worldedit.bukkit.BukkitAdapter;
 import com.sk89q.worldguard.WorldGuard;
-import com.sk89q.worldguard.bukkit.WorldGuardPlugin;
 import com.sk89q.worldguard.protection.ApplicableRegionSet;
 import com.sk89q.worldguard.protection.managers.RegionManager;
 import com.sk89q.worldguard.protection.regions.ProtectedRegion;
@@ -11,48 +10,85 @@ import net.calickrosmp.builder.plan.BuildPlan;
 import net.calickrosmp.builder.plan.Orientation;
 import net.calickrosmp.builder.validation.ValidationIssue;
 import net.calickrosmp.builder.validation.ValidationIssueType;
-import org.bukkit.Bukkit;
 import org.bukkit.Location;
-import org.bukkit.World;
 import org.bukkit.entity.Player;
 
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Optional;
 import java.util.Set;
 
 public final class WorldGuardHook {
     private final CalickroBuilderPlugin plugin;
+    private boolean enabled;
+    private boolean pluginPresent;
 
     public WorldGuardHook(CalickroBuilderPlugin plugin) {
         this.plugin = plugin;
+        refresh();
+    }
+
+    public void refresh() {
+        this.enabled = plugin.getConfig().getBoolean("hooks.worldguard.enabled", true);
+        this.pluginPresent = plugin.getServer().getPluginManager().isPluginEnabled("WorldGuard");
     }
 
     public boolean enabled() {
-        return plugin.getConfig().getBoolean("hooks.worldguard.enabled", true)
-                && Bukkit.getPluginManager().getPlugin("WorldGuard") != null;
+        return enabled && pluginPresent;
     }
 
     public boolean canBypass(Player player) {
-        return player.hasPermission("calickrobuilder.bypass.worldguard") || player.hasPermission("calickrobuilder.bypass.all");
+        return player != null
+                && (player.hasPermission("calickrobuilder.bypass.worldguard")
+                || player.hasPermission("calickrobuilder.bypass.all"));
     }
 
     public boolean canBypassPreserve(Player player) {
-        return player.hasPermission("calickrobuilder.bypass.preserve") || player.hasPermission("calickrobuilder.bypass.all");
+        return player != null
+                && (player.hasPermission("calickrobuilder.bypass.preserve")
+                || player.hasPermission("calickrobuilder.bypass.all"));
     }
 
-    public Optional<ValidationIssue> validate(Player player, BuildPlan plan) {
-        if (!enabled() || plan.anchor() == null || plan.anchor().getWorld() == null) {
-            return Optional.empty();
+    public ValidationIssue validate(Player player, BuildPlan plan) {
+        ValidationScan scan = scanPlan(
+                player,
+                plan.anchor(),
+                plan.houseSpec().orientation(),
+                plan.houseSpec().width(),
+                plan.houseSpec().depth(),
+                plan.footprint().padding()
+        );
+        if (scan.allowed()) {
+            return null;
+        }
+        return new ValidationIssue(ValidationIssueType.WORLDGUARD, scan.message());
+    }
+
+    public boolean isProtected(Location location, Player player) {
+        if (!enabled() || location == null || location.getWorld() == null) {
+            return false;
         }
 
-        ValidationScan scan = scanPlan(player, plan.anchor(), plan.houseSpec() != null ? plan.houseSpec().orientation() : Orientation.SOUTH,
-                plan.footprint().width(), plan.footprint().length(), plan.footprint().padding());
-        if (!scan.allowed()) {
-            return Optional.of(new ValidationIssue(ValidationIssueType.WORLDGUARD, scan.message()));
+        List<String> allowedRegions = plugin.settings().worldGuardAllowedBuildRegions();
+        List<String> preserveRegions = plugin.settings().worldGuardPreserveRegions();
+
+        if (allowedRegions.isEmpty() && preserveRegions.isEmpty()) {
+            return false;
         }
-        return Optional.empty();
+
+        boolean bypassWorldGuard = canBypass(player);
+        boolean bypassPreserve = canBypassPreserve(player);
+        Set<String> ids = getRegionIds(location);
+
+        if (!preserveRegions.isEmpty() && intersectsAny(ids, preserveRegions) && !bypassPreserve) {
+            return true;
+        }
+
+        if (!allowedRegions.isEmpty() && !bypassWorldGuard && !intersectsAny(ids, allowedRegions)) {
+            return true;
+        }
+
+        return false;
     }
 
     public ValidationScan scanPlan(Player player, Location anchor, Orientation orientation, int width, int depth, int padding) {
@@ -65,20 +101,30 @@ public final class WorldGuardHook {
 
         List<String> allowedRegions = plugin.settings().worldGuardAllowedBuildRegions();
         List<String> preserveRegions = plugin.settings().worldGuardPreserveRegions();
-        boolean bypassWorldGuard = canBypass(player);
-        boolean bypassPreserve = canBypassPreserve(player);
+        if (allowedRegions.isEmpty() && preserveRegions.isEmpty()) {
+            return ValidationScan.allowed("No WorldGuard region restrictions configured");
+        }
 
-        for (int localX = -padding; localX < width + padding; localX++) {
-            for (int localZ = -padding; localZ < depth + padding; localZ++) {
-                Location sample = rotate(anchor, orientation, localX, 0, localZ);
-                Set<String> ids = getRegionIds(sample);
+        int minX = -padding;
+        int maxX = width + padding - 1;
+        int minZ = -padding;
+        int maxZ = depth + padding - 1;
 
-                if (!preserveRegions.isEmpty() && intersectsAny(ids, preserveRegions) && !bypassPreserve) {
-                    return ValidationScan.blocked("That spot would overlap a preserved WorldGuard region.");
-                }
+        for (int relX = minX; relX <= maxX; relX++) {
+            for (int relZ = minZ; relZ <= maxZ; relZ++) {
+                Location check = rotate(anchor, orientation, relX, relZ);
+                if (isProtected(check, player)) {
+                    Set<String> ids = getRegionIds(check);
 
-                if (!allowedRegions.isEmpty() && !bypassWorldGuard && !intersectsAny(ids, allowedRegions)) {
-                    return ValidationScan.blocked("That spot is outside the allowed WorldGuard build region.");
+                    if (!preserveRegions.isEmpty() && intersectsAny(ids, preserveRegions) && !canBypassPreserve(player)) {
+                        return ValidationScan.blocked("That build would overlap a preserved WorldGuard region.");
+                    }
+
+                    if (!allowedRegions.isEmpty() && !canBypass(player) && !intersectsAny(ids, allowedRegions)) {
+                        return ValidationScan.blocked("That build would extend outside the allowed WorldGuard build region.");
+                    }
+
+                    return ValidationScan.blocked("That build would overlap a protected WorldGuard area.");
                 }
             }
         }
@@ -100,11 +146,12 @@ public final class WorldGuardHook {
             if (manager == null) {
                 return ids;
             }
+
             ApplicableRegionSet applicable = manager.getApplicableRegions(BukkitAdapter.asBlockVector(location));
             for (ProtectedRegion region : applicable) {
                 ids.add(region.getId().toLowerCase(Locale.ROOT));
             }
-        } catch (NoClassDefFoundError | Exception ignored) {
+        } catch (Throwable ignored) {
             return ids;
         }
 
@@ -124,12 +171,12 @@ public final class WorldGuardHook {
         return false;
     }
 
-    private Location rotate(Location base, Orientation orientation, int localX, int localY, int localZ) {
+    private Location rotate(Location anchor, Orientation orientation, int relX, int relZ) {
         return switch (orientation) {
-            case SOUTH -> base.clone().add(localX, localY, localZ);
-            case NORTH -> base.clone().add(-localX, localY, -localZ);
-            case EAST -> base.clone().add(localZ, localY, -localX);
-            case WEST -> base.clone().add(-localZ, localY, localX);
+            case SOUTH -> anchor.clone().add(relX, 0, relZ);
+            case NORTH -> anchor.clone().add(-relX, 0, -relZ);
+            case EAST -> anchor.clone().add(relZ, 0, -relX);
+            case WEST -> anchor.clone().add(-relZ, 0, relX);
         };
     }
 

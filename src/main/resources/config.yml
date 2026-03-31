@@ -44,6 +44,45 @@ build:
   default-path-material: DIRT_PATH
   preview-enabled: true
 
+# Build speed profiles.
+# mode:
+#   smart      = recommended default. Speeds up bulk sections and slows down detail finishing.
+#   fixed      = always uses fixed-ticks-per-step.
+#   cinematic  = slower, more immersive pacing for players watching the builder work.
+#   fast       = very quick pacing for testing. Large builds may lag slower servers.
+#   custom     = uses the values from the custom preset below.
+build-speed:
+  mode: smart
+
+  # Only used when mode = fixed.
+  # Lower = faster, higher = slower.
+  fixed-ticks-per-step: 8
+
+  presets:
+    cinematic:
+      # Slow and immersive building.
+      base-ticks-per-step: 20
+      detail-multiplier: 1.5
+      bulk-multiplier: 1.0
+
+    smart:
+      # Recommended default. Faster on large plain sections, slower near the end/detail pass.
+      base-ticks-per-step: 10
+      detail-multiplier: 1.4
+      bulk-multiplier: 0.7
+
+    fast:
+      # Fast testing mode. Warning: large builds may lag the server if used too aggressively.
+      base-ticks-per-step: 2
+      detail-multiplier: 1.0
+      bulk-multiplier: 0.5
+
+    custom:
+      # Fully adjustable mode for server owners who want their own pacing.
+      base-ticks-per-step: 6
+      detail-multiplier: 1.2
+      bulk-multiplier: 0.8
+
 messages:
   prefix: "&6[CalickroBuilder]&r "
   no-builder-selected: "No builder NPC is currently selected or bound."

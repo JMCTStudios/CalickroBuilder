@@ -26,6 +26,9 @@ permissions:
   calickrobuilder.speed:
     description: Lets admins change builder speed at runtime
     default: op
+  calickrobuilder.speedmode:
+    description: Lets admins change builder speed modes at runtime
+    default: op
   calickrobuilder.bypass.preserve:
     description: Lets the builder ignore preserved spawn-center or preserve-region checks
     default: op

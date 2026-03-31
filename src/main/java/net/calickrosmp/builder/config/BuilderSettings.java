@@ -1,6 +1,7 @@
 package net.calickrosmp.builder.config;
 
 import net.calickrosmp.builder.CalickroBuilderPlugin;
+import net.calickrosmp.builder.npc.BuilderSpeedMode;
 import org.bukkit.Material;
 import org.bukkit.configuration.file.FileConfiguration;
 
@@ -32,6 +33,20 @@ public final class BuilderSettings {
     private List<Material> siteAvoidGroundMaterials;
     private List<String> worldGuardAllowedBuildRegions;
     private List<String> worldGuardPreserveRegions;
+    private BuilderSpeedMode defaultSpeedMode;
+    private long fixedTicksPerStep;
+    private long cinematicBaseTicks;
+    private long smartBaseTicks;
+    private long fastBaseTicks;
+    private long customBaseTicks;
+    private double cinematicDetailMultiplier;
+    private double cinematicBulkMultiplier;
+    private double smartDetailMultiplier;
+    private double smartBulkMultiplier;
+    private double fastDetailMultiplier;
+    private double fastBulkMultiplier;
+    private double customDetailMultiplier;
+    private double customBulkMultiplier;
 
     public BuilderSettings(CalickroBuilderPlugin plugin) {
         this.plugin = plugin;
@@ -77,6 +92,25 @@ public final class BuilderSettings {
         }
         this.worldGuardAllowedBuildRegions = normalize(config.getStringList("hooks.worldguard.allowed-build-regions"));
         this.worldGuardPreserveRegions = normalize(config.getStringList("hooks.worldguard.preserve-regions"));
+
+        this.defaultSpeedMode = BuilderSpeedMode.fromString(config.getString("build-speed.mode", "smart"));
+        this.fixedTicksPerStep = Math.max(1L, config.getLong("build-speed.fixed-ticks-per-step", 8L));
+
+        this.cinematicBaseTicks = Math.max(1L, config.getLong("build-speed.presets.cinematic.base-ticks-per-step", 20L));
+        this.cinematicDetailMultiplier = config.getDouble("build-speed.presets.cinematic.detail-multiplier", 1.5D);
+        this.cinematicBulkMultiplier = config.getDouble("build-speed.presets.cinematic.bulk-multiplier", 1.0D);
+
+        this.smartBaseTicks = Math.max(1L, config.getLong("build-speed.presets.smart.base-ticks-per-step", 10L));
+        this.smartDetailMultiplier = config.getDouble("build-speed.presets.smart.detail-multiplier", 1.4D);
+        this.smartBulkMultiplier = config.getDouble("build-speed.presets.smart.bulk-multiplier", 0.7D);
+
+        this.fastBaseTicks = Math.max(1L, config.getLong("build-speed.presets.fast.base-ticks-per-step", 2L));
+        this.fastDetailMultiplier = config.getDouble("build-speed.presets.fast.detail-multiplier", 1.0D);
+        this.fastBulkMultiplier = config.getDouble("build-speed.presets.fast.bulk-multiplier", 0.5D);
+
+        this.customBaseTicks = Math.max(1L, config.getLong("build-speed.presets.custom.base-ticks-per-step", 6L));
+        this.customDetailMultiplier = config.getDouble("build-speed.presets.custom.detail-multiplier", 1.2D);
+        this.customBulkMultiplier = config.getDouble("build-speed.presets.custom.bulk-multiplier", 0.8D);
     }
 
     private List<String> normalize(List<String> values) {
@@ -112,8 +146,42 @@ public final class BuilderSettings {
     public List<Material> siteAvoidGroundMaterials() { return List.copyOf(siteAvoidGroundMaterials); }
     public List<String> worldGuardAllowedBuildRegions() { return List.copyOf(worldGuardAllowedBuildRegions); }
     public List<String> worldGuardPreserveRegions() { return List.copyOf(worldGuardPreserveRegions); }
+    public BuilderSpeedMode defaultSpeedMode() { return defaultSpeedMode; }
+    public long fixedTicksPerStep() { return fixedTicksPerStep; }
 
     public void setBuildIntervalTicks(long buildIntervalTicks) {
         this.buildIntervalTicks = Math.max(1L, buildIntervalTicks);
+    }
+
+    public void setDefaultSpeedMode(BuilderSpeedMode mode) {
+        this.defaultSpeedMode = mode == null ? BuilderSpeedMode.SMART : mode;
+    }
+
+    public void setFixedTicksPerStep(long ticks) {
+        this.fixedTicksPerStep = Math.max(1L, ticks);
+    }
+
+    public long resolveDelayTicks(BuilderSpeedMode mode, int totalTasks, int currentIndex) {
+        BuilderSpeedMode resolved = mode == null ? defaultSpeedMode : mode;
+        double progress = totalTasks <= 0 ? 0.0D : Math.min(1.0D, Math.max(0.0D, (double) currentIndex / (double) totalTasks));
+        return switch (resolved) {
+            case FIXED -> Math.max(1L, fixedTicksPerStep);
+            case CINEMATIC -> applyProgress(cinematicBaseTicks, cinematicDetailMultiplier, cinematicBulkMultiplier, progress);
+            case FAST -> applyProgress(fastBaseTicks, fastDetailMultiplier, fastBulkMultiplier, progress);
+            case CUSTOM -> applyProgress(customBaseTicks, customDetailMultiplier, customBulkMultiplier, progress);
+            case SMART -> applyProgress(smartBaseTicks, smartDetailMultiplier, smartBulkMultiplier, progress);
+        };
+    }
+
+    private long applyProgress(long base, double detailMultiplier, double bulkMultiplier, double progress) {
+        double multiplier;
+        if (progress < 0.65D) {
+            multiplier = bulkMultiplier;
+        } else if (progress < 0.9D) {
+            multiplier = 1.0D;
+        } else {
+            multiplier = detailMultiplier;
+        }
+        return Math.max(1L, Math.round(base * multiplier));
     }
 }
