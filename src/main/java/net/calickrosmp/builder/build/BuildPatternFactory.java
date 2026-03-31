@@ -59,8 +59,10 @@ public final class BuildPatternFactory {
 
         tasks.add(block(base, orientation, doorX, 1, 0, Material.AIR));
         tasks.add(block(base, orientation, doorX, 2, 0, Material.AIR));
+
         tasks.add(door(base, orientation, doorX, 1, 0, Material.SPRUCE_DOOR, Bisected.Half.BOTTOM));
         tasks.add(door(base, orientation, doorX, 2, 0, Material.SPRUCE_DOOR, Bisected.Half.TOP));
+        tasks.add(entranceStair(base, orientation, doorX, 0, -1, Material.SPRUCE_STAIRS));
 
         addWindow(tasks, base, orientation, 1, 2, 0);
         addWindow(tasks, base, orientation, width - 2, 2, 0);
@@ -85,8 +87,8 @@ public final class BuildPatternFactory {
 
     private static void addWindow(List<BuildTask> tasks, Location base, Orientation orientation,
                                   int x, int y, int z) {
-        tasks.add(block(base, orientation, x, y, z, Material.GLASS_PANE));
-        tasks.add(block(base, orientation, x, y + 1, z, Material.GLASS_PANE));
+        tasks.add(block(base, orientation, x, y, z, Material.GLASS));
+        tasks.add(block(base, orientation, x, y + 1, z, Material.GLASS));
     }
 
     private static BuildTask block(Location base, Orientation orientation, int localX, int localY, int localZ, Material material) {
@@ -97,6 +99,29 @@ public final class BuildPatternFactory {
             case WEST -> base.clone().add(-localZ, localY, localX);
         };
         return new BuildTask(placed, material);
+    }
+
+
+    private static BuildTask entranceStair(Location base, Orientation orientation, int localX, int localY, int localZ, Material material) {
+        Location placed = switch (orientation) {
+            case SOUTH -> base.clone().add(localX, localY, localZ);
+            case NORTH -> base.clone().add(-localX, localY, -localZ);
+            case EAST -> base.clone().add(localZ, localY, -localX);
+            case WEST -> base.clone().add(-localZ, localY, localX);
+        };
+        BlockData data = material.createBlockData();
+        if (data instanceof org.bukkit.block.data.type.Stairs stairs) {
+            stairs.setFacing(switch (orientation) {
+                case SOUTH -> BlockFace.SOUTH;
+                case NORTH -> BlockFace.NORTH;
+                case EAST -> BlockFace.EAST;
+                case WEST -> BlockFace.WEST;
+            });
+            stairs.setHalf(org.bukkit.block.data.Bisected.Half.BOTTOM);
+            stairs.setShape(org.bukkit.block.data.type.Stairs.Shape.STRAIGHT);
+            stairs.setWaterlogged(false);
+        }
+        return new BuildTask(placed, material, data);
     }
 
     private static BuildTask door(Location base, Orientation orientation, int localX, int localY, int localZ, Material material, Bisected.Half half) {
